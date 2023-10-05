@@ -9,17 +9,13 @@ interface IWETH {
 }
 
 contract GasBot {
+    using SafeERC20 for IERC20;
+
     address private owner;
     mapping(address => bool) private isRelayer;
     mapping(uint256 => bool) private isOutboundIdUsed;
     uint256 internal constant GASBOT_FEE_BPS = 100; // 1%
     uint256 internal constant BPS = 10000;
-
-    using SafeERC20 for IERC20;
-
-    event GasTransferredOut(address indexed recipient, uint256 amount);
-
-    event Donate(address indexed sender, uint256 amount);
 
     constructor(address _owner, address _relayer) {
         require(_owner != address(0));
