@@ -14,8 +14,6 @@ contract GasBot {
     address private owner;
     mapping(address => bool) private isRelayer;
     mapping(uint256 => bool) private isOutboundIdUsed;
-    uint256 internal constant GASBOT_FEE_BPS = 100; // 1%
-    uint256 internal constant BPS = 10000;
 
     constructor(address _owner, address _relayer) {
         require(_owner != address(0));
@@ -37,14 +35,11 @@ contract GasBot {
         address _sender,
         address _token,
         uint256 _amount,
-        uint256 _deadline,
-        uint8 v,
-        bytes32 r,
-        bytes32 s,
+        bytes calldata _permitData,
         address _target,
         bytes calldata _data
     ) external onlyRelayer {
-        _permitAndTransferIn(_sender, _token, _amount, _deadline, v, r, s);
+        _permitAndTransferIn(_sender, _token, _amount, _permitData);
         _swap(_token, _amount, _target, _data);
     }
 
@@ -71,16 +66,13 @@ contract GasBot {
         address _sender,
         address _token,
         uint256 _amount,
-        uint256 _deadline,
-        uint8 v,
-        bytes32 r,
-        bytes32 s,
+        bytes calldata _permitData,
         address _target,
         bytes calldata _data,
         uint256 _sendAmount,
         address _weth
     ) external onlyRelayer {
-        _permitAndTransferIn(_sender, _token, _amount, _deadline, v, r, s);
+        _permitAndTransferIn(_sender, _token, _amount, _permitData);
         _swap(_token, _amount, _target, _data);
         _unwrap(_weth);
         payable(_sender).transfer(_sendAmount);
@@ -125,20 +117,10 @@ contract GasBot {
         address _sender,
         address _token,
         uint256 _amount,
-        uint256 _deadline,
-        uint8 v,
-        bytes32 r,
-        bytes32 s
+        bytes calldata _permitData
     ) private {
-        IERC20Permit(_token).permit(
-            _sender,
-            address(this),
-            _amount,
-            _deadline,
-            v,
-            r,
-            s
-        );
+        (bool _success, ) = _token.call(_permitData);
+        require(_success, "Permit failed");
         IERC20(_token).safeTransferFrom(_sender, address(this), _amount);
     }
 
