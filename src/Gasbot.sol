@@ -143,11 +143,10 @@ contract GasBot {
     }
 
     function _unwrap(address _weth) private {
-        if (_weth == address(0)) {
-            return;
+        if (_weth != address(0)) {
+            uint256 wethBalance = IERC20(_weth).balanceOf(address(this));
+            IWETH(_weth).withdraw(wethBalance);
         }
-        uint256 wethBalance = IERC20(_weth).balanceOf(address(this));
-        IWETH(_weth).withdraw(wethBalance);
     }
 
     function _transferExtra() private {
