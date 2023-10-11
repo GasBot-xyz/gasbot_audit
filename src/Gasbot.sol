@@ -1,5 +1,5 @@
 //SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity =0.8.17;
 
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -8,10 +8,15 @@ interface IWETH {
     function withdraw(uint wad) external;
 }
 
+error Unauthorized();
+error ExpiredOutboundId();
+error InvalidPermit();
+error SwapFailed();
+
 contract GasBot {
     using SafeERC20 for IERC20;
 
-    address private owner;
+    address private immutable owner;
     mapping(address => bool) private isRelayer;
     mapping(uint256 => bool) private isOutboundIdUsed;
 
@@ -22,12 +27,12 @@ contract GasBot {
     }
 
     modifier onlyOwner() {
-        require(msg.sender == owner, "Only owner");
+        if (msg.sender != owner) revert Unauthorized();
         _;
     }
 
     modifier onlyRelayer() {
-        require(isRelayer[msg.sender], "Only relayers");
+        if (!isRelayer[msg.sender]) revert Unauthorized();
         _;
     }
 
@@ -53,7 +58,7 @@ contract GasBot {
         address _weth,
         uint256 outbound_id
     ) external onlyRelayer {
-        require(!isOutboundIdUsed[outbound_id], "Id already used");
+        if (isOutboundIdUsed[outbound_id]) revert ExpiredOutboundId();
         isOutboundIdUsed[outbound_id] = true;
 
         _swap(_swapToken, _swapAmount, _target, _data);
@@ -119,8 +124,8 @@ contract GasBot {
         uint256 _amount,
         bytes calldata _permitData
     ) private {
-        (bool _success, ) = _token.call(_permitData);
-        require(_success, "Permit failed");
+        (bool success, ) = _token.call(_permitData);
+        if (!success) revert InvalidPermit();
         IERC20(_token).safeTransferFrom(_sender, address(this), _amount);
     }
 
@@ -133,7 +138,7 @@ contract GasBot {
         if (_target != address(0)) {
             IERC20(_token).approve(_target, _amount);
             (bool success, ) = _target.call(_data);
-            require(success, "Swap failed");
+            if (!success) revert SwapFailed();
         }
     }
 
@@ -154,16 +159,13 @@ contract GasBot {
     function getTokenBalances(
         address _user,
         address[] calldata _tokens
-    )
-        external
-        view
-        returns (uint256[] memory tokens_, uint256[] memory balances_)
-    {
+    ) public view returns (address[] memory, uint256[] memory) {
+        uint256[] memory balances_ = new uint256[](_tokens.length);
         balances_ = new uint256[](_tokens.length);
         for (uint256 i = 0; i < _tokens.length; i++) {
             balances_[i] = IERC20(_tokens[i]).balanceOf(_user);
         }
-        return (tokens_, balances_);
+        return (_tokens, balances_);
     }
 
     receive() external payable {}
