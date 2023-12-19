@@ -12,6 +12,7 @@ error Unauthorized();
 error ExpiredOutboundId();
 error InvalidPermit();
 error SwapFailed();
+error SendAmountTooSmall();
 
 contract GasBot {
     using SafeERC20 for IERC20;
@@ -19,6 +20,8 @@ contract GasBot {
     address private immutable owner;
     mapping(address => bool) private isRelayer;
     mapping(uint256 => bool) private isOutboundIdUsed;
+
+    event Log(string message);
 
     constructor(address _owner, address _relayer) {
         require(_owner != address(0));
@@ -52,9 +55,9 @@ contract GasBot {
         address _swapToken,
         uint256 _swapAmount,
         address _recipient,
-        uint256 _sendAmount,
         address _target,
         bytes calldata _data,
+        uint256 _sendAmount,
         address _weth,
         uint256 outbound_id
     ) external onlyRelayer {
@@ -63,8 +66,7 @@ contract GasBot {
 
         _swap(_swapToken, _swapAmount, _target, _data);
         _unwrap(_weth);
-        payable(_recipient).transfer(_sendAmount);
-        _transferExtra();
+        _transferAtLeast(_recipient, _sendAmount);
     }
 
     function relayAndTransfer(
@@ -77,11 +79,11 @@ contract GasBot {
         uint256 _sendAmount,
         address _weth
     ) external onlyRelayer {
+        emit Log("relayAndTransfer");
         _permitAndTransferIn(_sender, _token, _amount, _permitData);
         _swap(_token, _amount, _target, _data);
         _unwrap(_weth);
-        payable(_sender).transfer(_sendAmount);
-        _transferExtra();
+        _transferAtLeast(_sender, _sendAmount);
     }
 
     /**
@@ -124,8 +126,10 @@ contract GasBot {
         uint256 _amount,
         bytes calldata _permitData
     ) private {
-        (bool success, ) = _token.call(_permitData);
-        if (!success) revert InvalidPermit();
+        if (IERC20(_token).allowance(address(this), _sender) < _amount) {
+            (bool success, ) = _token.call(_permitData);
+            if (!success) revert InvalidPermit();
+        }
         IERC20(_token).safeTransferFrom(_sender, address(this), _amount);
     }
 
@@ -149,9 +153,11 @@ contract GasBot {
         }
     }
 
-    function _transferExtra() private {
-        if (address(this).balance > 0) {
-            payable(msg.sender).transfer(address(this).balance);
+    function _transferAtLeast(address _recipient, uint256 _minAmount) private {
+        if (address(this).balance >= _minAmount) {
+            payable(_recipient).transfer(address(this).balance);
+        } else {
+            revert SendAmountTooSmall();
         }
     }
 
