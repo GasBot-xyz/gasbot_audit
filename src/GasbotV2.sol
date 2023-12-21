@@ -278,12 +278,15 @@ contract GasbotV2 {
         uint256[] memory balances_ = new uint256[](length);
 
         // Query user's native balance
+
         tokens_[0] = address(0);
         balances_[0] = _user.balance;
 
         // Query user's token balances
         for (uint256 i = 1; i < length; i++) {
-            balances_[i] = IERC20(_tokens[i]).balanceOf(_user);
+            // @audit ++i is a tiny bit cheaper than i++
+            balances_[i] = IERC20(_tokens[i - 1]).balanceOf(_user); // @audit Bug - index-out-of-bounds error
+            tokens_[i] = _tokens[i - 1];
         }
         return (tokens_, balances_);
     }
@@ -294,7 +297,7 @@ contract GasbotV2 {
         uint256 length = _relayers.length;
         uint256[] memory balances_ = new uint256[](length);
         for (uint256 i = 0; i < length; i++) {
-            require(isRelayer[_relayers[i]], "Invalid relayer");
+            require(isRelayer[_relayers[i]], "Invalid relayer"); // @audit maybe continue if not valid relayer?
             balances_[i] = _relayers[i].balance;
         }
         return balances_;

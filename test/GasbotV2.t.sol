@@ -1,13 +1,15 @@
-//SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT
 
 pragma solidity =0.8.17;
 
 import {Test} from "forge-std/Test.sol";
+import {IERC20} from "forge-std/interfaces/IERC20.sol";
 
 import {GasbotV2} from "src/GasbotV2.sol";
 
 /// forge test --match-path test/GasbotV2.t.sol -vvv
 contract BaseGasbotV2Test is Test {
+    address public constant AAVE = 0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9;
     address public constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
     address public constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address public constant RELAYER =
@@ -84,8 +86,113 @@ contract Constructor is BaseGasbotV2Test {
         address[] memory relayers = new address[](1);
         relayers[0] = relayer;
 
+        // Can call functions as deployment was successful
+        gasbot.getRelayerBalances(relayers);
+    }
+}
+
+contract Receive is BaseGasbotV2Test {
+    function test_successful_canReceiveEther() public {
+        (bool ok, ) = address(gasbot).call{value: 1 ether}("");
+        assertTrue(ok);
+    }
+}
+
+contract RelayTokenIn is BaseGasbotV2Test {
+    function test_revertsIf_notAuthorizedRelayer(address caller) public {
+        GasbotV2.PermitParams memory params = GasbotV2.PermitParams(
+            0xf466385C089e1772893947BA01f81264946D57D8,
+            0x59aF55fE00CcC0f0c248510fCC774fdC4919BBBf,
+            4000000,
+            0,
+            0,
+            bytes32(0),
+            bytes32(0)
+        );
+
+        vm.assume(caller != RELAYER);
+        vm.expectRevert("Unauthorized");
+        vm.prank(caller);
+        gasbot.relayTokenIn(AAVE, params, 100, 1_000e18);
+    }
+}
+
+contract GetTokenBalances is BaseGasbotV2Test {
+    function setUp() public override {
+        super.setUp();
+        // vm.createSelectFork(vm.rpcUrl("mainnet"), 18835949);
+    }
+
+    function test_successful_onlyNative() public {
+        address user = makeAddr("user");
+        address[] memory ownedTokens = new address[](0);
+
+        (address[] memory tokens, uint256[] memory balances) = gasbot
+            .getTokenBalances(user, ownedTokens);
+
+        assertEq(tokens.length, balances.length);
+        assertEq(tokens.length, 1);
+        assertEq(balances[0], 0);
+        assertEq(tokens[0], address(0));
+    }
+
+    function test_successful_passedTokens() public {
+        uint256 usdcAmount = 1_000e6;
+        address user = makeAddr("user");
+
+        address[] memory ownedTokens = new address[](2);
+        ownedTokens[0] = AAVE;
+        ownedTokens[1] = USDC;
+
+        vm.mockCall(
+            AAVE,
+            abi.encodeWithSelector(IERC20.balanceOf.selector),
+            abi.encode(0)
+        );
+
+        vm.mockCall(
+            USDC,
+            abi.encodeWithSelector(IERC20.balanceOf.selector),
+            abi.encode(usdcAmount)
+        );
+
+        (address[] memory tokens, uint256[] memory balances) = gasbot
+            .getTokenBalances(user, ownedTokens);
+
+        assertEq(tokens.length, balances.length);
+        assertEq(tokens.length, 3);
+        assertEq(balances[0], 0);
+        assertEq(tokens[0], address(0));
+        assertEq(balances[1], 0);
+        assertEq(tokens[1], AAVE);
+        assertEq(balances[2], usdcAmount);
+        assertEq(tokens[2], USDC);
+    }
+}
+
+contract GetRelayerBalances is BaseGasbotV2Test {
+    function test_revertsIf_invalidRelayer(address relayer) public {
+        vm.assume(relayer != RELAYER);
+
+        address[] memory relayers = new address[](1);
+        relayers[0] = relayer;
+
+        vm.expectRevert("Invalid relayer");
+        gasbot.getRelayerBalances(relayers);
+    }
+
+    function test_successful() public {
+        address[] memory relayers = new address[](1);
+        relayers[0] = RELAYER;
+
         uint256[] memory balances = gasbot.getRelayerBalances(relayers);
 
         assertEq(balances[0], 0);
+
+        RELAYER.call{value: 1 ether}("");
+
+        balances = gasbot.getRelayerBalances(relayers);
+
+        assertEq(balances[0], 1 ether);
     }
 }
