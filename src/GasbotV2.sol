@@ -12,11 +12,11 @@ contract GasbotV2 {
     mapping(address => bool) private isRelayer;
     mapping(uint256 => bool) private isOutboundIdUsed;
 
-    IWETH immutable WETH;
-    address uniswapRouter;
+    IWETH immutable WETH; // @audit missing visibility
+    address uniswapRouter; // @audit missing visibility
     bool private isV3Router; // true if router is Uniswap V3 router, false if Uniswap V2 router
     address private homeToken;
-    uint24 private defaultPoolFee = 500; // 0.05%
+    uint24 private defaultPoolFee = 500; // 0.05% @audit can be constant
 
     event GasSwap(
         address indexed sender,
@@ -50,7 +50,7 @@ contract GasbotV2 {
         require(_homeToken != address(0));
 
         owner = _owner;
-        isRelayer[_relayer] = true;
+        isRelayer[_relayer] = true; // @audit potentially setting address(0) as authorized unnecessarily
         uniswapRouter = _uniswapRouter;
         isV3Router = _isV3Router;
         WETH = IWETH(_weth);
@@ -250,6 +250,7 @@ contract GasbotV2 {
     }
 
     function replinishRelayer(
+        // @audit typo: replenish
         address _relayer,
         uint24 _poolFee,
         uint256 _swapAmount,
