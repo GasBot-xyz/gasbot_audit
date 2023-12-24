@@ -8,4 +8,7 @@ remappings = [
     "forge-std/=lib/forge-std/src/",
 ]
 
+[rpc_endpoints]
+mainnet = "${RPC_MAINNET}"
+
 # See more config options https://github.com/foundry-rs/foundry/tree/master/config
