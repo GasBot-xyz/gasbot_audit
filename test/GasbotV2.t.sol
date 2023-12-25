@@ -8,6 +8,12 @@ import {IERC20} from "forge-std/interfaces/IERC20.sol";
 import {SigUtils} from "./SigUtils.sol";
 import {GasbotV2} from "src/GasbotV2.sol";
 
+contract MockERC20 {
+    function transfer(address to, uint256 amount) external pure {
+        revert();
+    }
+}
+
 /// forge test --match-path test/GasbotV2.t.sol -vvv
 /// forge coverage --match-path test/GasbotV2.t.sol
 contract BaseGasbotV2Test is Test {
@@ -166,36 +172,38 @@ contract RelayTokenIn is BaseGasbotV2Test {
         assertEq(IERC20(USDC).balanceOf(address(gasbot)), amount);
     }
 
-    // function test_successful_alreadyApprovedWithSwap_uniV2() public {
-    //     gasbot.setUniswapRouter(UNI_V2_ROUTER, false);
+    /// NOTE: THIS TEST IS BAD, NEED TO UPDATE CODE FIRST
+    function test_successful_alreadyApprovedWithSwap_uniV2() public {
+        gasbot.setUniswapRouter(UNI_V2_ROUTER, false);
 
-    //     uint256 amount = 0.01 ether;
-    //     uint256 minAmountOut = 5_000000;
-    //     address owner = 0xf466385C089e1772893947BA01f81264946D57D8;
+        uint256 amount = 0.01 ether;
+        uint256 minAmountOut = 5_000000;
+        address owner = 0xf466385C089e1772893947BA01f81264946D57D8;
 
-    //     deal(AAVE, owner, amount);
+        deal(AAVE, owner, amount);
 
-    //     GasbotV2.PermitParams memory params = GasbotV2.PermitParams(
-    //         owner,
-    //         0x59aF55fE00CcC0f0c248510fCC774fdC4919BBBf,
-    //         amount,
-    //         0,
-    //         0,
-    //         bytes32(0),
-    //         bytes32(0)
-    //     );
+        GasbotV2.PermitParams memory params = GasbotV2.PermitParams(
+            owner,
+            0x59aF55fE00CcC0f0c248510fCC774fdC4919BBBf,
+            amount,
+            0,
+            0,
+            bytes32(0),
+            bytes32(0)
+        );
 
-    //     assertEq(IERC20(AAVE).balanceOf(address(gasbot)), 0);
+        assertEq(IERC20(AAVE).balanceOf(address(gasbot)), 0);
 
-    //     vm.prank(owner);
-    //     IERC20(AAVE).approve(address(gasbot), amount);
+        vm.prank(owner);
+        IERC20(AAVE).approve(address(gasbot), amount);
 
-    //     vm.prank(RELAYER);
-    //     gasbot.relayTokenIn(AAVE, params, 500, minAmountOut);
+        vm.expectRevert();
+        vm.prank(RELAYER);
+        gasbot.relayTokenIn(AAVE, params, 500, minAmountOut);
 
-    //     assertEq(IERC20(AAVE).balanceOf(address(gasbot)), 0);
-    //     assertGe(IERC20(USDC).balanceOf(address(gasbot)), minAmountOut);
-    // }
+        // assertEq(IERC20(AAVE).balanceOf(address(gasbot)), 0);
+        // assertGe(IERC20(USDC).balanceOf(address(gasbot)), minAmountOut);
+    }
 
     function test_successful_alreadyApprovedWithSwap_uniV3() public {
         // FRAX/USDC is ~1:1
@@ -285,6 +293,22 @@ contract TransferGasOut is BaseGasbotV2Test {
         gasbot.transferGasOut(50e6, recipient, 0, minAmountOut, 1);
 
         vm.expectRevert("Expired outbound ID");
+        vm.prank(RELAYER);
+        gasbot.transferGasOut(50e6, recipient, 0, minAmountOut, 1);
+    }
+
+    function test_revertsIf_notEnoughBalance() public {
+        address recipient = makeAddr("recipient");
+        uint256 minAmountOut = 0.02 ether;
+        deal(USDC, address(gasbot), 100e6);
+
+        vm.mockCall(
+            WETH,
+            abi.encodeWithSelector(IERC20.balanceOf.selector),
+            abi.encode(0)
+        );
+
+        vm.expectRevert("Send amount too small");
         vm.prank(RELAYER);
         gasbot.transferGasOut(50e6, recipient, 0, minAmountOut, 1);
     }
@@ -512,6 +536,18 @@ contract Execute is BaseGasbotV2Test {
         gasbot.execute(address(0), bytes(""), 0, address(0));
     }
 
+    function test_revertsIf_callNotSuccessful() public {
+        MockERC20 erc20 = new MockERC20();
+
+        bytes memory data = abi.encodeCall(
+            MockERC20.transfer,
+            (address(this), 1 ether)
+        );
+
+        vm.expectRevert();
+        gasbot.execute(address(erc20), data, 0, address(0));
+    }
+
     function test_successful_transferToRecipient() public {
         address recipient = makeAddr("recipient");
 
@@ -526,7 +562,7 @@ contract Execute is BaseGasbotV2Test {
         assertEq(address(recipient).balance, 1 ether);
     }
 
-    function test_successful() public {
+    function test_successful_noRecipient() public {
         uint256 dealAmount = 100e6;
 
         deal(USDC, address(gasbot), dealAmount);
@@ -541,6 +577,31 @@ contract Execute is BaseGasbotV2Test {
 
         gasbot.execute(USDC, data, 0, address(0));
 
+        assertEq(IERC20(USDC).balanceOf(address(gasbot)), 0);
+        assertEq(IERC20(USDC).balanceOf(address(this)), dealAmount);
+    }
+
+    function test_successful_withRecipient() public {
+        address recipient = makeAddr("recipient");
+        uint256 dealAmount = 100e6;
+
+        deal(address(gasbot), 1 ether);
+        deal(USDC, address(gasbot), dealAmount);
+
+        bytes memory data = abi.encodeCall(
+            IERC20.transfer,
+            (address(this), dealAmount)
+        );
+
+        assertEq(address(gasbot).balance, 1 ether);
+        assertEq(address(recipient).balance, 0);
+        assertEq(IERC20(USDC).balanceOf(address(gasbot)), dealAmount);
+        assertEq(IERC20(USDC).balanceOf(address(this)), 0);
+
+        gasbot.execute(USDC, data, 0, recipient);
+
+        assertEq(address(gasbot).balance, 0);
+        assertEq(address(recipient).balance, 1 ether);
         assertEq(IERC20(USDC).balanceOf(address(gasbot)), 0);
         assertEq(IERC20(USDC).balanceOf(address(this)), dealAmount);
     }
@@ -574,6 +635,27 @@ contract ReplenishRelayer is BaseGasbotV2Test {
 
         assertEq(IERC20(USDC).balanceOf(address(gasbot)), 0);
         assertGe(RELAYER.balance, balanceRelayerBefore + minAmountOut);
+    }
+
+    function test_successful_noWethBalance() public {
+        uint256 dealAmount = 50e6;
+        uint256 minAmountOut = 0.02 ether;
+
+        deal(USDC, address(gasbot), dealAmount);
+
+        assertEq(IERC20(USDC).balanceOf(address(gasbot)), dealAmount);
+
+        uint256 balanceRelayerBefore = RELAYER.balance;
+
+        vm.mockCall(
+            WETH,
+            abi.encodeWithSelector(IERC20.balanceOf.selector),
+            abi.encode(0)
+        );
+        gasbot.replenishRelayer(RELAYER, 500, dealAmount, minAmountOut);
+
+        assertEq(IERC20(USDC).balanceOf(address(gasbot)), 0);
+        assertEq(RELAYER.balance, balanceRelayerBefore);
     }
 }
 

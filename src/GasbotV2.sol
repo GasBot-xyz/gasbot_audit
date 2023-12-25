@@ -190,7 +190,7 @@ contract GasbotV2 {
             address[] memory path = new address[](2);
             path[0] = _tokenIn;
             path[1] = _tokenOut;
-            IUniswapRouterV2(uniswapRouter).swapExactTokensForETH( // @audit This will revert because tokenOut is not WETH (supposed to be home token)
+            IUniswapRouterV2(uniswapRouter).swapExactTokensForETH( // @audit This will revert when tokenOut is not WETH (ie home token swap)
                 _amount,
                 _minAmountOut,
                 path,
