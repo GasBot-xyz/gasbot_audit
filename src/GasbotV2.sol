@@ -1,4 +1,5 @@
 //SPDX-License-Identifier: MIT
+
 pragma solidity =0.8.17;
 
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
@@ -12,11 +13,11 @@ contract GasbotV2 {
     mapping(address => bool) private isRelayer;
     mapping(uint256 => bool) private isOutboundIdUsed;
 
-    IWETH immutable WETH;
-    address uniswapRouter;
+    IWETH immutable WETH; // @audit missing visibility
+    address uniswapRouter; // @audit missing visibility
     bool private isV3Router; // true if router is Uniswap V3 router, false if Uniswap V2 router
     address private homeToken;
-    uint24 private defaultPoolFee = 500; // 0.05%
+    uint24 private defaultPoolFee = 500; // 0.05% @audit can be constant
 
     event GasSwap(
         address indexed sender,
@@ -50,7 +51,7 @@ contract GasbotV2 {
         require(_homeToken != address(0));
 
         owner = _owner;
-        isRelayer[_relayer] = true;
+        isRelayer[_relayer] = true; // @audit potentially setting address(0) as authorized unnecessarily
         uniswapRouter = _uniswapRouter;
         isV3Router = _isV3Router;
         WETH = IWETH(_weth);
@@ -113,7 +114,7 @@ contract GasbotV2 {
 
     /////// Public Functions ///////
 
-    // NOTE: This function should be called from a verified Gasbot UI to its ensure completion on the destination chain.
+    // NOTE: This function should be called from a verified Gasbot UI to ensure its completion on the destination chain.
     // If this function is called from an unverified UI, the user should verify the transaction
     // by submitting the transaction hash to the Gasbot UI at https://gasbot.xyz/verify-tx
     // If the user-supplied _toChainId is not supported, gas will be transferred back to the caller with Gasbot fee deducted.
@@ -121,6 +122,8 @@ contract GasbotV2 {
         uint256 _minAmountOut,
         uint16 _toChainId
     ) external payable {
+        // @audit maybe exit early is msg.value == 0? Right now, it'll fail at the Uniswap level
+        // after calling balanceOf and deposit
         uint256 initialBalance = IERC20(homeToken).balanceOf(address(this));
         WETH.deposit{value: msg.value}();
         _swap(address(WETH), homeToken, 0, msg.value, _minAmountOut);
@@ -177,6 +180,7 @@ contract GasbotV2 {
                     tokenOut: _tokenOut,
                     fee: _poolFee > 0 ? _poolFee : defaultPoolFee,
                     recipient: address(this),
+                    deadline: block.timestamp, // @audit Missing deadline means TX with always revert
                     amountIn: _amount,
                     amountOutMinimum: _minAmountOut,
                     sqrtPriceLimitX96: 0
@@ -186,7 +190,7 @@ contract GasbotV2 {
             address[] memory path = new address[](2);
             path[0] = _tokenIn;
             path[1] = _tokenOut;
-            IUniswapRouterV2(uniswapRouter).swapExactTokensForETH(
+            IUniswapRouterV2(uniswapRouter).swapExactTokensForETH( // @audit This will revert when tokenOut is not WETH (ie home token swap)
                 _amount,
                 _minAmountOut,
                 path,
@@ -203,7 +207,7 @@ contract GasbotV2 {
     }
 
     function _transferAtLeast(address _recipient, uint256 _minAmount) private {
-        require(address(this).balance >= _minAmount, "Send amount too small");
+        require(address(this).balance >= _minAmount, "Send amount too small"); // @audit Revert message doesn't make sense?
         payable(_recipient).transfer(address(this).balance);
     }
 
@@ -249,7 +253,8 @@ contract GasbotV2 {
         }
     }
 
-    function replinishRelayer(
+    function replenishRelayer(
+        // @audit typo: replenish
         address _relayer,
         uint24 _poolFee,
         uint256 _swapAmount,
@@ -277,12 +282,15 @@ contract GasbotV2 {
         uint256[] memory balances_ = new uint256[](length);
 
         // Query user's native balance
+
         tokens_[0] = address(0);
         balances_[0] = _user.balance;
 
         // Query user's token balances
         for (uint256 i = 1; i < length; i++) {
-            balances_[i] = IERC20(_tokens[i]).balanceOf(_user);
+            // @audit ++i is a tiny bit cheaper than i++
+            balances_[i] = IERC20(_tokens[i - 1]).balanceOf(_user); // @audit Bug - index-out-of-bounds error
+            tokens_[i] = _tokens[i - 1];
         }
         return (tokens_, balances_);
     }
@@ -293,7 +301,7 @@ contract GasbotV2 {
         uint256 length = _relayers.length;
         uint256[] memory balances_ = new uint256[](length);
         for (uint256 i = 0; i < length; i++) {
-            require(isRelayer[_relayers[i]], "Invalid relayer");
+            require(isRelayer[_relayers[i]], "Invalid relayer"); // @audit maybe continue if not valid relayer?
             balances_[i] = _relayers[i].balance;
         }
         return balances_;
