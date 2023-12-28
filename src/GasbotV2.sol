@@ -1,31 +1,17 @@
 //SPDX-License-Identifier: MIT
 
-pragma solidity =0.8.17;
+pragma solidity =0.8.22;
 
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./Interface.sol";
 
+/// @title GasbotV2
+/// @author 0xDjango
+/// @notice This contract is used to relay gas across chains. The contract holds a single "homeToken" to use as liquidity.
+/// @dev This contract may hold other tokens as a result of calling relayAndTransfer() with a token other than the home token.
 contract GasbotV2 {
     using SafeERC20 for IERC20;
-
-    address private immutable owner;
-    mapping(address => bool) private isRelayer;
-    mapping(uint256 => bool) private isOutboundIdUsed;
-
-    IWETH immutable WETH; // @audit missing visibility
-    address uniswapRouter; // @audit missing visibility
-    bool private isV3Router; // true if router is Uniswap V3 router, false if Uniswap V2 router
-    address private homeToken;
-    uint24 private defaultPoolFee = 500; // 0.05% @audit can be constant
-
-    event GasSwap(
-        address indexed sender,
-        uint256 nativeAmount,
-        uint256 usdAmount,
-        uint256 indexed fromChainId,
-        uint256 indexed toChainId
-    );
 
     struct PermitParams {
         address owner;
@@ -37,22 +23,40 @@ contract GasbotV2 {
         bytes32 s;
     }
 
+    address private immutable owner;
+    mapping(address => bool) private isRelayer;
+    mapping(uint256 => bool) private isOutboundIdUsed;
+
+    IWETH private immutable WETH;
+    address private defaultRouter;
+    bool private isV3Router; // true if router is Uniswap V3 router, false if Uniswap V2 router
+    address private homeToken;
+    uint24 private defaultPoolFee = 500; // 0.05%
+
+    event GasSwap(
+        address indexed sender,
+        uint256 nativeAmount,
+        uint256 usdAmount,
+        uint256 indexed fromChainId,
+        uint256 indexed toChainId
+    );
+
     constructor(
         address _owner,
         address _relayer,
-        address _uniswapRouter,
+        address _defaultRouter,
         bool _isV3Router,
         address _weth,
         address _homeToken
     ) {
         require(_owner != address(0));
-        require(_uniswapRouter != address(0));
+        require(_defaultRouter != address(0));
         require(_weth != address(0));
         require(_homeToken != address(0));
 
         owner = _owner;
-        isRelayer[_relayer] = true; // @audit potentially setting address(0) as authorized unnecessarily
-        uniswapRouter = _uniswapRouter;
+        isRelayer[_relayer] = true;
+        defaultRouter = _defaultRouter;
         isV3Router = _isV3Router;
         WETH = IWETH(_weth);
         homeToken = _homeToken;
@@ -70,69 +74,139 @@ contract GasbotV2 {
 
     /////// Protected External Functions ///////
 
+    /// @notice This function pulls in accepted tokens from the user's wallet.
+    /// @param _token The token to pull in.
+    /// @param _permitData The permit data to use for tokens supporting a permit() function.
+    /// @param _customRouter The router to use for swapping.
+    /// @param _uniV3Path The Uniswap V3 path to use for swapping.
+    /// @param _uniV2Path The Uniswap V2 path to use for swapping.
+    /// @param _minAmountOut The minimum amount of tokens to receive from the swap.
+    /// @dev If the token does not support permit, the user must approve this contract to spend the token.
+    ///      In this case, the passed permit signature will be ignored.
+    /// @dev If the token is the home token, no swap will be performed.
     function relayTokenIn(
         address _token,
         PermitParams calldata _permitData,
-        uint24 _poolFee,
+        address _customRouter,
+        bytes calldata _uniV3Path,
+        address[] calldata _uniV2Path,
         uint256 _minAmountOut
     ) external onlyRelayer {
         _permitAndTransferIn(_token, _permitData);
         if (_token == homeToken) {
             return; // no need to swap
         }
-        _swap(_token, homeToken, _poolFee, _permitData.amount, _minAmountOut);
+        _swap(
+            _customRouter,
+            _token,
+            _uniV3Path,
+            _uniV2Path,
+            _permitData.amount,
+            _minAmountOut
+        );
     }
 
+    /// @notice This function transfers out accepted tokens to the user's wallet.
+    /// @param _swapAmount The amount of homeToken to swap.
+    /// @param _recipient The address to transfer the swapped tokens to.
+    /// @param _minAmountOut The minimum amount of wrapped native (eg WETH) to receive from the swap.
+    /// @param outbound_id The ID of the outbound transaction. Must be unique to prevent accidental replay.
     function transferGasOut(
         uint256 _swapAmount,
         address _recipient,
-        uint24 _poolFee,
         uint256 _minAmountOut,
         uint256 outbound_id
     ) external onlyRelayer {
         require(!isOutboundIdUsed[outbound_id], "Expired outbound ID");
         isOutboundIdUsed[outbound_id] = true;
 
-        _swap(homeToken, address(WETH), _poolFee, _swapAmount, _minAmountOut);
+        (
+            bytes memory uniV3Path,
+            address[] memory uniV2Path
+        ) = getDefaultSwapPaths(true);
+        _swap(
+            defaultRouter,
+            homeToken,
+            uniV3Path,
+            uniV2Path,
+            _swapAmount,
+            _minAmountOut
+        );
         _unwrap();
         _transferAtLeast(_recipient, _minAmountOut);
     }
 
+    /// @notice This function pulls in accepted tokens from the user's wallet and transfers out native to the user's wallet.
+    /// @param _token The token to pull in.
+    /// @param _permitData The permit data to use for tokens supporting a permit() function.
+    /// @param _customRouter The router to use for swapping.
+    /// @param _uniV3Path The Uniswap V3 path to use for swapping.
+    /// @param _uniV2Path The Uniswap V2 path to use for swapping.
+    /// @param _swapAmount The amount of _token to swap. This will be lower than the permit amount as a result of Gasbot fees and relay txn fees.
+    /// @param _minAmountOut The minimum amount of wrapped native (eg WETH) to receive from the swap.
+    /// @dev This function is used for same-chain swaps.
     function relayAndTransfer(
         address _token,
         PermitParams calldata _permitData,
-        uint24 _poolFee,
+        address _customRouter,
+        bytes calldata _uniV3Path,
+        address[] calldata _uniV2Path,
         uint256 _swapAmount,
         uint256 _minAmountOut
     ) external onlyRelayer {
         require(_swapAmount < _permitData.amount, "Invalid swap amount");
         _permitAndTransferIn(_token, _permitData);
-        _swap(_token, address(WETH), _poolFee, _swapAmount, _minAmountOut);
+        _swap(
+            _customRouter,
+            _token,
+            _uniV3Path,
+            _uniV2Path,
+            _swapAmount,
+            _minAmountOut
+        );
         _unwrap();
         _transferAtLeast(_permitData.owner, _minAmountOut);
     }
 
     /////// Public Functions ///////
 
-    // NOTE: This function should be called from a verified Gasbot UI to ensure its completion on the destination chain.
-    // If this function is called from an unverified UI, the user should verify the transaction
-    // by submitting the transaction hash to the Gasbot UI at https://gasbot.xyz/verify-tx
-    // If the user-supplied _toChainId is not supported, gas will be transferred back to the caller with Gasbot fee deducted.
+    /// @notice This function is used to swap native to the home token. It can be called by anyone and emits an event that broadcasts
+    ///         the amount of native swapped and the amount of homeToken received as a result of the swap.
+    /// @notice This function should be called from a verified Gasbot UI to ensure its completion on the destination chain.
+    ///         If this function is called from an unverified UI, the user should verify the transaction
+    ///         by submitting the transaction hash to the Gasbot UI at https://gasbot.xyz/verify-txn
+    ///         If the user-supplied _toChainId is not supported, gas will be transferred back to the caller with Gasbot fee deducted.
+    /// @notice Gasbot transfers native using .transfer(),
+    ///         therefore it is crucial that the caller of this function either be an EOA or a contract that will not revert with .tranfer() gas stipend.
+    /// @param _minAmountOut The minimum amount of homeToken to receive from the swap.
+    /// @param _toChainId The chain ID of the destination chain.
     function swapGas(
         uint256 _minAmountOut,
         uint16 _toChainId
     ) external payable {
-        // @audit maybe exit early is msg.value == 0? Right now, it'll fail at the Uniswap level
-        // after calling balanceOf and deposit
+        require(msg.value > 0, "Invalid amount");
         uint256 initialBalance = IERC20(homeToken).balanceOf(address(this));
         WETH.deposit{value: msg.value}();
-        _swap(address(WETH), homeToken, 0, msg.value, _minAmountOut);
-        uint256 balanceDiff = IERC20(homeToken).balanceOf(address(this)) -
+
+        (
+            bytes memory uniV3Path,
+            address[] memory uniV2Path
+        ) = getDefaultSwapPaths(false);
+        _swap(
+            defaultRouter,
+            address(WETH),
+            uniV3Path,
+            uniV2Path,
+            msg.value,
+            _minAmountOut
+        );
+        uint256 addedValue = IERC20(homeToken).balanceOf(address(this)) -
             initialBalance;
+
         emit GasSwap(
             msg.sender,
             msg.value,
-            balanceDiff,
+            addedValue,
             block.chainid,
             _toChainId
         );
@@ -166,34 +240,29 @@ contract GasbotV2 {
     }
 
     function _swap(
+        address _router,
         address _tokenIn,
-        address _tokenOut,
-        uint24 _poolFee,
+        bytes memory _uniV3Path,
+        address[] memory _uniV2Path,
         uint256 _amount,
         uint256 _minAmountOut
     ) private {
-        IERC20(_tokenIn).approve(uniswapRouter, _amount);
-        if (isV3Router) {
-            IUniswapRouterV3(uniswapRouter).exactInputSingle(
-                IUniswapRouterV3.ExactInputSingleParams({
-                    tokenIn: _tokenIn,
-                    tokenOut: _tokenOut,
-                    fee: _poolFee > 0 ? _poolFee : defaultPoolFee,
+        IERC20(_tokenIn).approve(_router, _amount);
+        if (_uniV3Path.length > 0) {
+            IUniswapRouterV3(_router).exactInput(
+                IUniswapRouterV3.ExactInputParams({
+                    path: _uniV3Path,
                     recipient: address(this),
-                    deadline: block.timestamp, // @audit Missing deadline means TX with always revert
+                    deadline: block.timestamp,
                     amountIn: _amount,
-                    amountOutMinimum: _minAmountOut,
-                    sqrtPriceLimitX96: 0
+                    amountOutMinimum: _minAmountOut
                 })
             );
         } else {
-            address[] memory path = new address[](2);
-            path[0] = _tokenIn;
-            path[1] = _tokenOut;
-            IUniswapRouterV2(uniswapRouter).swapExactTokensForETH( // @audit This will revert when tokenOut is not WETH (ie home token swap)
+            IUniswapRouterV2(_router).swapExactTokensForTokens(
                 _amount,
                 _minAmountOut,
-                path,
+                _uniV2Path,
                 address(this),
                 block.timestamp
             );
@@ -207,26 +276,41 @@ contract GasbotV2 {
     }
 
     function _transferAtLeast(address _recipient, uint256 _minAmount) private {
-        require(address(this).balance >= _minAmount, "Send amount too small"); // @audit Revert message doesn't make sense?
+        require(address(this).balance >= _minAmount, "Native balance too low");
         payable(_recipient).transfer(address(this).balance);
     }
 
     /////// Admin-Only Functions ///////
 
-    function setUniswapRouter(
-        address _uniswapRouter,
+    /// @notice This function is used to set the default router used for swapping in the swapGas() and transferGasOut() functions.
+    /// @param _defaultRouter The address of the default router.
+    /// @param _isV3Router True if the router is a Uniswap V3 router, false if it is a Uniswap V2 router.
+    function setDefaultRouter(
+        address _defaultRouter,
         bool _isV3Router
     ) external onlyOwner {
-        require(_uniswapRouter != address(0));
-        uniswapRouter = _uniswapRouter;
+        require(_defaultRouter != address(0));
+        defaultRouter = _defaultRouter;
         isV3Router = _isV3Router;
     }
 
+    /// @notice This function is used to set the default pool fee used for swapping in the swapGas() and transferGasOut() functions.
+    /// @param _defaultPoolFee The default pool fee.
+    function setDefaultPoolFee(uint24 _defaultPoolFee) external onlyOwner {
+        require(_defaultPoolFee > 0);
+        defaultPoolFee = _defaultPoolFee;
+    }
+
+    /// @notice This function is used to set the home token for the contract.
+    ///         It will likely only be changed as a result of a stablecoin depeg or decline in liquidity.
+    /// @param _homeToken The address of the new home token.
     function setHomeToken(address _homeToken) external onlyOwner {
         require(_homeToken != address(0));
         homeToken = _homeToken;
     }
 
+    /// @notice This function is used to add or remove relayers.
+    /// @param _relayer The address of the relayer.
     function setRelayer(address _relayer, bool _status) external onlyOwner {
         isRelayer[_relayer] = _status;
     }
@@ -253,19 +337,45 @@ contract GasbotV2 {
         }
     }
 
-    function replenishRelayer(
-        // @audit typo: replenish
-        address _relayer,
-        uint24 _poolFee,
+    /// @notice This function will swap the home token for native and send it to the relayers.
+    /// @param _relayers The addresses of the relayers.
+    /// @param _amounts The amounts of gas to send to each relayer.
+    /// @param _swapAmount The amount of homeToken to swap.
+    /// @param _minAmountOut The minimum amount of wrapped native (eg WETH) to receive from the swap.
+    /// @dev All passed relayers must be valid relayers.
+    function replenishRelayers(
+        address[] calldata _relayers,
+        uint256[] calldata _amounts,
         uint256 _swapAmount,
         uint256 _minAmountOut
     ) external payable onlyOwner {
-        require(isRelayer[_relayer], "Invalid relayer");
-        _swap(homeToken, address(WETH), _poolFee, _swapAmount, _minAmountOut);
+        (
+            bytes memory uniV3Path,
+            address[] memory uniV2Path
+        ) = getDefaultSwapPaths(true);
+        _swap(
+            defaultRouter,
+            homeToken,
+            uniV3Path,
+            uniV2Path,
+            _swapAmount,
+            _minAmountOut
+        );
         _unwrap();
-        payable(_relayer).transfer(address(this).balance);
+
+        uint256 length = _relayers.length;
+        for (uint256 i = 0; i < length; ++i) {
+            require(isRelayer[_relayers[i]], "Invalid relayer");
+            if (i == length - 1) {
+                _transferAtLeast(_relayers[i], _amounts[i]); // Any extra goes to the last relayer
+            } else {
+                payable(_relayers[i]).transfer(_amounts[i]);
+            }
+        }
     }
 
+    /// @notice This function will withdraw any ERC20 tokens held by the contract.
+    /// @param _token The address of the token to withdraw.
     function withdraw(address _token) external onlyOwner {
         uint256 balance = IERC20(_token).balanceOf(address(this));
         IERC20(_token).safeTransfer(msg.sender, balance);
@@ -273,6 +383,9 @@ contract GasbotV2 {
 
     /////// View Functions ///////
 
+    /// @notice This function is used by the Gasbot UI to scan user wallets for native and token balances.
+    /// @param _user The address of the user.
+    /// @param _tokens The addresses of the tokens to query.
     function getTokenBalances(
         address _user,
         address[] calldata _tokens
@@ -305,6 +418,39 @@ contract GasbotV2 {
             balances_[i] = _relayers[i].balance;
         }
         return balances_;
+    }
+
+    function getDefaultSwapPaths(
+        bool _toWeth
+    )
+        private
+        view
+        returns (bytes memory uniV3Path, address[] memory uniV2Path)
+    {
+        if (isV3Router) {
+            if (_toWeth) {
+                uniV3Path = abi.encodePacked(
+                    homeToken,
+                    defaultPoolFee,
+                    address(WETH)
+                );
+            } else {
+                uniV3Path = abi.encodePacked(
+                    address(WETH),
+                    defaultPoolFee,
+                    homeToken
+                );
+            }
+        } else {
+            uniV2Path = new address[](2);
+            if (_toWeth) {
+                uniV2Path[0] = homeToken;
+                uniV2Path[1] = address(WETH);
+            } else {
+                uniV2Path[0] = address(WETH);
+                uniV2Path[1] = homeToken;
+            }
+        }
     }
 
     receive() external payable {}

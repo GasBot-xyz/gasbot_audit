@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-pragma solidity =0.8.17;
+pragma solidity =0.8.22;
 
 import {Test} from "forge-std/Test.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
@@ -142,7 +142,17 @@ contract RelayTokenIn is BaseGasbotV2Test {
         vm.assume(caller != RELAYER);
         vm.expectRevert("Unauthorized");
         vm.prank(caller);
-        gasbot.relayTokenIn(AAVE, params, 100, 1_000e18);
+
+        bytes memory uniV3Path = abi.encode(FRAX, 500, WETH);
+        address[] memory uniV2Path = new address[](0);
+        gasbot.relayTokenIn(
+            FRAX,
+            params,
+            UNI_V3_ROUTER,
+            uniV3Path,
+            uniV2Path,
+            1_000e18
+        );
     }
 
     function test_successful_alreadyApprovedNoSwap() public {
@@ -166,49 +176,27 @@ contract RelayTokenIn is BaseGasbotV2Test {
         vm.prank(owner);
         IERC20(USDC).approve(address(gasbot), amount);
 
+        bytes memory uniV3Path = abi.encode(USDC, 500, WETH);
+        address[] memory uniV2Path = new address[](0);
+
         vm.prank(RELAYER);
-        gasbot.relayTokenIn(USDC, params, 100, 1_000e18);
+        gasbot.relayTokenIn(
+            USDC,
+            params,
+            UNI_V3_ROUTER,
+            uniV3Path,
+            uniV2Path,
+            1_000e18
+        );
 
         assertEq(IERC20(USDC).balanceOf(address(gasbot)), amount);
     }
 
-    /// NOTE: THIS TEST IS BAD, NEED TO UPDATE CODE FIRST
     function test_successful_alreadyApprovedWithSwap_uniV2() public {
-        gasbot.setUniswapRouter(UNI_V2_ROUTER, false);
+        gasbot.setDefaultRouter(UNI_V2_ROUTER, false);
 
-        uint256 amount = 0.01 ether;
-        uint256 minAmountOut = 5_000000;
-        address owner = 0xf466385C089e1772893947BA01f81264946D57D8;
-
-        deal(AAVE, owner, amount);
-
-        GasbotV2.PermitParams memory params = GasbotV2.PermitParams(
-            owner,
-            0x59aF55fE00CcC0f0c248510fCC774fdC4919BBBf,
-            amount,
-            0,
-            0,
-            bytes32(0),
-            bytes32(0)
-        );
-
-        assertEq(IERC20(AAVE).balanceOf(address(gasbot)), 0);
-
-        vm.prank(owner);
-        IERC20(AAVE).approve(address(gasbot), amount);
-
-        vm.expectRevert();
-        vm.prank(RELAYER);
-        gasbot.relayTokenIn(AAVE, params, 500, minAmountOut);
-
-        // assertEq(IERC20(AAVE).balanceOf(address(gasbot)), 0);
-        // assertGe(IERC20(USDC).balanceOf(address(gasbot)), minAmountOut);
-    }
-
-    function test_successful_alreadyApprovedWithSwap_uniV3() public {
-        // FRAX/USDC is ~1:1
-        uint256 amount = 40 ether;
-        uint256 minAmountOut = 35_000000;
+        uint256 amount = 10 ether; // ~$10 FRAX
+        uint256 minAmountOut = 1_000_000; // 1 USDC
         address owner = 0xf466385C089e1772893947BA01f81264946D57D8;
 
         deal(FRAX, owner, amount);
@@ -228,8 +216,61 @@ contract RelayTokenIn is BaseGasbotV2Test {
         vm.prank(owner);
         IERC20(FRAX).approve(address(gasbot), amount);
 
+        bytes memory uniV3Path = new bytes(0);
+        address[] memory uniV2Path = new address[](2);
+        uniV2Path[0] = FRAX;
+        uniV2Path[1] = USDC;
+
         vm.prank(RELAYER);
-        gasbot.relayTokenIn(FRAX, params, 500, minAmountOut);
+        gasbot.relayTokenIn(
+            FRAX,
+            params,
+            UNI_V2_ROUTER,
+            uniV3Path,
+            uniV2Path,
+            minAmountOut
+        );
+
+        assertEq(IERC20(AAVE).balanceOf(address(gasbot)), 0);
+        assertGe(IERC20(USDC).balanceOf(address(gasbot)), minAmountOut);
+    }
+
+    function test_successful_alreadyApprovedWithSwap_uniV3() public {
+        // FRAX/USDC is ~1:1
+        uint256 amount = 40 ether;
+        uint256 minAmountOut = 35_000_000;
+        address owner = 0xf466385C089e1772893947BA01f81264946D57D8;
+
+        deal(FRAX, owner, amount);
+
+        GasbotV2.PermitParams memory params = GasbotV2.PermitParams(
+            owner,
+            0x59aF55fE00CcC0f0c248510fCC774fdC4919BBBf,
+            amount,
+            0,
+            0,
+            bytes32(0),
+            bytes32(0)
+        );
+
+        assertEq(IERC20(FRAX).balanceOf(address(gasbot)), 0);
+
+        vm.prank(owner);
+        IERC20(FRAX).approve(address(gasbot), amount);
+
+        uint24 poolFee = 500;
+        bytes memory uniV3Path = abi.encodePacked(FRAX, poolFee, USDC);
+        address[] memory uniV2Path = new address[](0);
+
+        vm.prank(RELAYER);
+        gasbot.relayTokenIn(
+            FRAX,
+            params,
+            UNI_V3_ROUTER,
+            uniV3Path,
+            uniV2Path,
+            minAmountOut
+        );
 
         assertEq(IERC20(FRAX).balanceOf(address(gasbot)), 0);
         assertGe(IERC20(USDC).balanceOf(address(gasbot)), minAmountOut);
@@ -270,7 +311,14 @@ contract RelayTokenIn is BaseGasbotV2Test {
         assertEq(IERC20(USDC).balanceOf(address(gasbot)), 0);
 
         vm.prank(RELAYER);
-        gasbot.relayTokenIn(USDC, params, 100, minAmountOut);
+        gasbot.relayTokenIn(
+            USDC,
+            params,
+            UNI_V3_ROUTER,
+            new bytes(0),
+            new address[](0),
+            minAmountOut
+        );
 
         assertEq(IERC20(USDC).balanceOf(address(gasbot)), amount);
     }
@@ -281,7 +329,7 @@ contract TransferGasOut is BaseGasbotV2Test {
         vm.assume(caller != RELAYER);
         vm.expectRevert("Unauthorized");
         vm.prank(caller);
-        gasbot.transferGasOut(1 ether, RELAYER, 100, 1 ether, 1);
+        gasbot.transferGasOut(1 ether, RELAYER, 1 ether, 1);
     }
 
     function test_revertsIf_expiredOutboundId() public {
@@ -290,11 +338,11 @@ contract TransferGasOut is BaseGasbotV2Test {
         deal(USDC, address(gasbot), 100e6);
 
         vm.prank(RELAYER);
-        gasbot.transferGasOut(50e6, recipient, 0, minAmountOut, 1);
+        gasbot.transferGasOut(50e6, recipient, minAmountOut, 1);
 
         vm.expectRevert("Expired outbound ID");
         vm.prank(RELAYER);
-        gasbot.transferGasOut(50e6, recipient, 0, minAmountOut, 1);
+        gasbot.transferGasOut(50e6, recipient, minAmountOut, 1);
     }
 
     function test_revertsIf_notEnoughBalance() public {
@@ -308,9 +356,9 @@ contract TransferGasOut is BaseGasbotV2Test {
             abi.encode(0)
         );
 
-        vm.expectRevert("Send amount too small");
+        vm.expectRevert("Native balance too low");
         vm.prank(RELAYER);
-        gasbot.transferGasOut(50e6, recipient, 0, minAmountOut, 1);
+        gasbot.transferGasOut(50e6, recipient, minAmountOut, 1);
     }
 
     function test_successful() public {
@@ -322,7 +370,7 @@ contract TransferGasOut is BaseGasbotV2Test {
         assertEq(address(recipient).balance, 0);
 
         vm.prank(RELAYER);
-        gasbot.transferGasOut(50e6, recipient, 0, minAmountOut, 1);
+        gasbot.transferGasOut(50e6, recipient, minAmountOut, 1);
 
         assertEq(IERC20(USDC).balanceOf(address(gasbot)), 50e6);
         assertGe(address(recipient).balance, minAmountOut);
@@ -343,8 +391,21 @@ contract RelayAndTransfer is BaseGasbotV2Test {
 
         vm.assume(caller != RELAYER);
         vm.expectRevert("Unauthorized");
+
+        uint24 poolFee = 500;
+        bytes memory uniV3Path = abi.encodePacked(AAVE, poolFee, USDC);
+        address[] memory uniV2Path = new address[](0);
+
         vm.prank(caller);
-        gasbot.relayAndTransfer(AAVE, params, 100, 1 ether, 1 ether);
+        gasbot.relayAndTransfer(
+            AAVE,
+            params,
+            UNI_V3_ROUTER,
+            uniV3Path,
+            uniV2Path,
+            1_000e18,
+            0
+        );
     }
 
     function test_revertsIf_invalidAmount() public {
@@ -358,9 +419,21 @@ contract RelayAndTransfer is BaseGasbotV2Test {
             bytes32(0)
         );
 
+        uint24 poolFee = 500;
+        bytes memory uniV3Path = abi.encodePacked(AAVE, poolFee, USDC);
+        address[] memory uniV2Path = new address[](0);
+
         vm.expectRevert("Invalid swap amount");
         vm.prank(RELAYER);
-        gasbot.relayAndTransfer(AAVE, params, 100, 2 ether, 2 ether);
+        gasbot.relayAndTransfer(
+            AAVE,
+            params,
+            UNI_V3_ROUTER,
+            uniV3Path,
+            uniV2Path,
+            2 ether,
+            0
+        );
     }
 
     function test_successful_withApproval_uniV3() public {
@@ -388,8 +461,20 @@ contract RelayAndTransfer is BaseGasbotV2Test {
 
         uint256 ownerBalanceBefore = address(owner).balance;
 
+        uint24 poolFee = 500;
+        bytes memory uniV3Path = abi.encodePacked(USDC, poolFee, WETH);
+        address[] memory uniV2Path = new address[](0);
+
         vm.prank(RELAYER);
-        gasbot.relayAndTransfer(USDC, params, 0, amount - 1e6, minAmountOut);
+        gasbot.relayAndTransfer(
+            USDC,
+            params,
+            UNI_V3_ROUTER,
+            uniV3Path,
+            uniV2Path,
+            amount - 1e6,
+            minAmountOut
+        );
 
         assertEq(IERC20(USDC).balanceOf(address(gasbot)), 1e6);
         assertEq(IERC20(WETH).balanceOf(address(gasbot)), 0);
@@ -404,7 +489,7 @@ contract SwapGas is BaseGasbotV2Test {
         address caller = makeAddr("caller");
         deal(caller, 1 ether);
 
-        vm.expectRevert();
+        vm.expectRevert("Invalid amount");
         vm.prank(caller);
         gasbot.swapGas{value: 0}(minAmountOut, 137);
     }
@@ -426,22 +511,22 @@ contract SwapGas is BaseGasbotV2Test {
     }
 }
 
-contract SetUniswapRouter is BaseGasbotV2Test {
+contract SetDefaultRouter is BaseGasbotV2Test {
     function test_revertsIf_notOwner(address caller) public {
         vm.assume(caller != address(this));
         vm.expectRevert("Unauthorized");
         vm.prank(caller);
-        gasbot.setUniswapRouter(makeAddr("new-router"), false);
+        gasbot.setDefaultRouter(makeAddr("new-router"), false);
     }
 
     function test_revertsIf_routerIsAddressZero() public {
         vm.expectRevert();
-        gasbot.setUniswapRouter(address(0), false);
+        gasbot.setDefaultRouter(address(0), false);
     }
 
     function test_successful(address newRouter, bool isV3) public {
         vm.assume(newRouter != address(0));
-        gasbot.setUniswapRouter(newRouter, isV3);
+        gasbot.setDefaultRouter(newRouter, isV3);
     }
 }
 
@@ -492,12 +577,26 @@ contract SetRelayer is BaseGasbotV2Test {
         address newRelayer = makeAddr("new-relayer");
         vm.expectRevert("Unauthorized");
         vm.prank(newRelayer);
-        gasbot.relayTokenIn(USDC, params, 100, 0);
+        gasbot.relayTokenIn(
+            USDC,
+            params,
+            UNI_V3_ROUTER,
+            new bytes(0),
+            new address[](0),
+            0
+        );
 
         gasbot.setRelayer(newRelayer, true);
 
         vm.prank(newRelayer);
-        gasbot.relayTokenIn(USDC, params, 100, 0);
+        gasbot.relayTokenIn(
+            USDC,
+            params,
+            UNI_V3_ROUTER,
+            new bytes(0),
+            new address[](0),
+            0
+        );
     }
 
     function test_successful_removedRelayerCannotCall() public {
@@ -518,12 +617,26 @@ contract SetRelayer is BaseGasbotV2Test {
         IERC20(USDC).approve(address(gasbot), 100 ether);
 
         vm.prank(RELAYER);
-        gasbot.relayTokenIn(USDC, params, 100, 1_000e18);
+        gasbot.relayTokenIn(
+            USDC,
+            params,
+            UNI_V3_ROUTER,
+            new bytes(0),
+            new address[](0),
+            0
+        );
 
         gasbot.setRelayer(RELAYER, false);
         vm.expectRevert("Unauthorized");
         vm.prank(RELAYER);
-        gasbot.relayTokenIn(USDC, params, 100, 1_000e18);
+        gasbot.relayTokenIn(
+            USDC,
+            params,
+            UNI_V3_ROUTER,
+            new bytes(0),
+            new address[](0),
+            0
+        );
     }
 }
 
@@ -607,18 +720,37 @@ contract Execute is BaseGasbotV2Test {
     }
 }
 
-contract ReplenishRelayer is BaseGasbotV2Test {
+contract ReplenishRelayers is BaseGasbotV2Test {
     function test_revertsIf_notOwner(address caller) public {
         vm.assume(caller != address(this));
 
+        address[] memory relayers = new address[](1);
+        relayers[0] = RELAYER;
+        uint256[] memory amounts = new uint256[](1);
+        amounts[0] = 1 ether;
+
         vm.expectRevert("Unauthorized");
         vm.prank(caller);
-        gasbot.replenishRelayer(RELAYER, 500, 1 ether, 1 ether);
+        gasbot.replenishRelayers(relayers, amounts, 1 ether, 1 ether);
     }
 
     function test_revertsIf_notRelayer() public {
+        uint256 dealAmount = 50e6;
+        uint256 minAmountOut = 0.02 ether;
+
+        deal(USDC, address(gasbot), dealAmount);
+
+        assertEq(IERC20(USDC).balanceOf(address(gasbot)), dealAmount);
+
+        uint256 balanceRelayerBefore = RELAYER.balance;
+
+        address[] memory relayers = new address[](1);
+        relayers[0] = makeAddr("not-relayer");
+        uint256[] memory amounts = new uint256[](1);
+        amounts[0] = minAmountOut;
+
         vm.expectRevert("Invalid relayer");
-        gasbot.replenishRelayer(makeAddr("not-relayer"), 500, 1 ether, 1 ether);
+        gasbot.replenishRelayers(relayers, amounts, dealAmount, minAmountOut);
     }
 
     function test_successful() public {
@@ -631,13 +763,18 @@ contract ReplenishRelayer is BaseGasbotV2Test {
 
         uint256 balanceRelayerBefore = RELAYER.balance;
 
-        gasbot.replenishRelayer(RELAYER, 500, dealAmount, minAmountOut);
+        address[] memory relayers = new address[](1);
+        relayers[0] = RELAYER;
+        uint256[] memory amounts = new uint256[](1);
+        amounts[0] = minAmountOut;
+
+        gasbot.replenishRelayers(relayers, amounts, dealAmount, minAmountOut);
 
         assertEq(IERC20(USDC).balanceOf(address(gasbot)), 0);
         assertGe(RELAYER.balance, balanceRelayerBefore + minAmountOut);
     }
 
-    function test_successful_noWethBalance() public {
+    function test_successful_multiplerRelayers() public {
         uint256 dealAmount = 50e6;
         uint256 minAmountOut = 0.02 ether;
 
@@ -645,17 +782,30 @@ contract ReplenishRelayer is BaseGasbotV2Test {
 
         assertEq(IERC20(USDC).balanceOf(address(gasbot)), dealAmount);
 
-        uint256 balanceRelayerBefore = RELAYER.balance;
+        address newRelayer = makeAddr("new-relayer");
+        gasbot.setRelayer(newRelayer, true);
 
-        vm.mockCall(
-            WETH,
-            abi.encodeWithSelector(IERC20.balanceOf.selector),
-            abi.encode(0)
-        );
-        gasbot.replenishRelayer(RELAYER, 500, dealAmount, minAmountOut);
+        uint256 balanceRelayerBefore = RELAYER.balance;
+        uint256 balanceNewRelayerBefore = newRelayer.balance;
+
+        address[] memory relayers = new address[](2);
+        relayers[0] = RELAYER;
+        relayers[1] = newRelayer;
+        uint256[] memory amounts = new uint256[](2);
+        amounts[0] = (minAmountOut * 1) / 3;
+        amounts[1] = (minAmountOut * 2) / 3;
+
+        gasbot.replenishRelayers(relayers, amounts, dealAmount, minAmountOut);
 
         assertEq(IERC20(USDC).balanceOf(address(gasbot)), 0);
-        assertEq(RELAYER.balance, balanceRelayerBefore);
+        assertGe(
+            RELAYER.balance,
+            balanceRelayerBefore + (minAmountOut * 1) / 3
+        );
+        assertGe(
+            newRelayer.balance,
+            balanceNewRelayerBefore + (minAmountOut * 2) / 3
+        );
     }
 }
 

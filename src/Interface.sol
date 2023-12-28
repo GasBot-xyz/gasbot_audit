@@ -1,5 +1,5 @@
 //SPDX-License-Identifier: MIT
-pragma solidity =0.8.17;
+pragma solidity =0.8.22;
 
 interface IWETH {
     function deposit() external payable;
@@ -10,15 +10,8 @@ interface IWETH {
 }
 
 interface IUniswapRouterV2 {
-    function swapExactTokensForETH(
+    function swapExactTokensForTokens(
         uint amountIn,
-        uint amountOutMin,
-        address[] calldata path,
-        address to,
-        uint deadline
-    ) external returns (uint[] memory amounts);
-
-    function swapExactETHForTokens(
         uint amountOutMin,
         address[] calldata path,
         address to,
@@ -27,18 +20,15 @@ interface IUniswapRouterV2 {
 }
 
 interface IUniswapRouterV3 {
-    struct ExactInputSingleParams {
-        address tokenIn;
-        address tokenOut;
-        uint24 fee;
+    struct ExactInputParams {
+        bytes path;
         address recipient;
         uint256 deadline;
         uint256 amountIn;
         uint256 amountOutMinimum;
-        uint160 sqrtPriceLimitX96;
     }
 
-    function exactInputSingle(
-        ExactInputSingleParams memory params
-    ) external returns (uint256 amountOut);
+    function exactInput(
+        ExactInputParams calldata params
+    ) external payable returns (uint256 amountOut);
 }
