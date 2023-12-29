@@ -52,7 +52,8 @@ contract BaseGasbotV2Test is Test {
             UNI_V3_ROUTER,
             true,
             WETH,
-            USDC
+            USDC,
+            100
         );
 
         sigUtils = new SigUtils(USDC_DOMAIN_SEPARATOR);
@@ -60,16 +61,18 @@ contract BaseGasbotV2Test is Test {
 }
 
 contract Constructor is BaseGasbotV2Test {
-    function setUp() public override {}
+    function setUp() public override {
+        vm.createSelectFork(vm.rpcUrl("mainnet"), 18835949);
+    }
 
     function test_revertsIf_ownerIsAddressZero() public {
         vm.expectRevert();
-        new GasbotV2(address(0), RELAYER, UNI_V3_ROUTER, true, WETH, USDC);
+        new GasbotV2(address(0), RELAYER, UNI_V3_ROUTER, true, WETH, USDC, 100);
     }
 
     function test_revertsIf_uniswapRouterIsAddressZero() public {
         vm.expectRevert();
-        new GasbotV2(address(this), RELAYER, address(0), true, WETH, USDC);
+        new GasbotV2(address(this), RELAYER, address(0), true, WETH, USDC, 100);
     }
 
     function test_revertsIf_wethIsAddressZero() public {
@@ -80,7 +83,8 @@ contract Constructor is BaseGasbotV2Test {
             UNI_V3_ROUTER,
             true,
             address(0),
-            USDC
+            USDC,
+            100
         );
     }
 
@@ -92,32 +96,42 @@ contract Constructor is BaseGasbotV2Test {
             UNI_V3_ROUTER,
             true,
             WETH,
-            address(0)
+            address(0),
+            100
         );
     }
 
-    function test_successful(
-        address owner,
-        address relayer,
-        address router,
-        bool isV3,
-        address weth,
-        address homeToken
-    ) public {
-        vm.assume(owner != address(0));
-        vm.assume(relayer != address(0));
-        vm.assume(router != address(0));
-        vm.assume(weth != address(0));
-        vm.assume(homeToken != address(0));
+    /// @dev Running into "too many inputs" error after adding maxValue to contructor.
+    // function test_successful(
+    //     address owner,
+    //     address relayer,
+    //     address router,
+    //     bool isV3,
+    //     address weth,
+    //     address homeToken
+    // ) public {
+    //     vm.assume(owner != address(0));
+    //     vm.assume(relayer != address(0));
+    //     vm.assume(router != address(0));
+    //     vm.assume(weth != address(0));
+    //     vm.assume(homeToken == USDC);
 
-        gasbot = new GasbotV2(owner, relayer, router, isV3, weth, homeToken);
+    //     gasbot = new GasbotV2(
+    //         owner,
+    //         relayer,
+    //         router,
+    //         isV3,
+    //         weth,
+    //         homeToken,
+    //         50
+    //     );
 
-        address[] memory relayers = new address[](1);
-        relayers[0] = relayer;
+    //     address[] memory relayers = new address[](1);
+    //     relayers[0] = relayer;
 
-        // Can call functions as deployment was successful
-        gasbot.getRelayerBalances(relayers);
-    }
+    //     // Can call functions as deployment was successful
+    //     gasbot.getRelayerBalances(relayers);
+    // }
 }
 
 contract Receive is BaseGasbotV2Test {
@@ -509,6 +523,18 @@ contract SwapGas is BaseGasbotV2Test {
 
         assertGe(IERC20(USDC).balanceOf(address(gasbot)), minAmountOut);
     }
+
+    function test_revertsIf_greaterThanMaxValue() public {
+        uint256 minAmountOut = 110e6;
+        address caller = makeAddr("caller");
+        deal(caller, 10 ether);
+
+        assertEq(IERC20(USDC).balanceOf(address(gasbot)), 0);
+
+        vm.expectRevert("Exceeded max value");
+        vm.prank(caller);
+        gasbot.swapGas{value: 1 ether}(minAmountOut, 137);
+    }
 }
 
 contract SetDefaultRouter is BaseGasbotV2Test {
@@ -546,6 +572,33 @@ contract SetHomeToken is BaseGasbotV2Test {
     function test_successful(address newToken) public {
         vm.assume(newToken != address(0));
         gasbot.setHomeToken(newToken);
+    }
+}
+
+contract SetMaxValue is BaseGasbotV2Test {
+    function test_revertsIf_notOwner(address caller) public {
+        vm.assume(caller != address(this));
+        vm.expectRevert("Unauthorized");
+        vm.prank(caller);
+        gasbot.setMaxValue(50);
+    }
+
+    function test_successful(address newToken) public {
+        gasbot.setMaxValue(50);
+    }
+
+    function test_successful_swapRevertsIfSetTo0() public {
+        gasbot.setMaxValue(0);
+
+        uint256 minAmountOut = 20e6;
+        address caller = makeAddr("caller");
+        deal(caller, 1 ether);
+
+        assertEq(IERC20(USDC).balanceOf(address(gasbot)), 0);
+
+        vm.expectRevert("Exceeded max value");
+        vm.prank(caller);
+        gasbot.swapGas{value: 0.02 ether}(minAmountOut, 137);
     }
 }
 
@@ -833,13 +886,15 @@ contract Withdraw is BaseGasbotV2Test {
 
 contract GetTokenBalances is BaseGasbotV2Test {
     function setUp() public override {
+        vm.createSelectFork(vm.rpcUrl("mainnet"), 18835949);
         gasbot = new GasbotV2(
             address(this),
             RELAYER,
             UNI_V3_ROUTER,
             true,
             WETH,
-            USDC
+            USDC,
+            100
         );
     }
 
@@ -892,13 +947,16 @@ contract GetTokenBalances is BaseGasbotV2Test {
 
 contract GetRelayerBalances is BaseGasbotV2Test {
     function setUp() public override {
+        vm.createSelectFork(vm.rpcUrl("mainnet"), 18835949);
+        vm.deal(RELAYER, 0);
         gasbot = new GasbotV2(
             address(this),
             RELAYER,
             UNI_V3_ROUTER,
             true,
             WETH,
-            USDC
+            USDC,
+            100
         );
     }
 

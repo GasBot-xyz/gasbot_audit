@@ -32,6 +32,7 @@ contract GasbotV2 {
     bool private isV3Router; // true if router is Uniswap V3 router, false if Uniswap V2 router
     address private homeToken;
     uint24 private defaultPoolFee = 500; // 0.05%
+    uint256 private maxValue;
 
     event GasSwap(
         address indexed sender,
@@ -47,7 +48,8 @@ contract GasbotV2 {
         address _defaultRouter,
         bool _isV3Router,
         address _weth,
-        address _homeToken
+        address _homeToken,
+        uint256 _maxValue
     ) {
         require(_owner != address(0));
         require(_defaultRouter != address(0));
@@ -60,6 +62,7 @@ contract GasbotV2 {
         isV3Router = _isV3Router;
         WETH = IWETH(_weth);
         homeToken = _homeToken;
+        maxValue = _maxValue * 10 ** IERC20Metadata(_homeToken).decimals();
     }
 
     modifier onlyOwner() {
@@ -203,6 +206,8 @@ contract GasbotV2 {
         uint256 addedValue = IERC20(homeToken).balanceOf(address(this)) -
             initialBalance;
 
+        require(addedValue <= maxValue, "Exceeded max value");
+
         emit GasSwap(
             msg.sender,
             msg.value,
@@ -307,6 +312,14 @@ contract GasbotV2 {
     function setHomeToken(address _homeToken) external onlyOwner {
         require(_homeToken != address(0));
         homeToken = _homeToken;
+    }
+
+    /// @notice This function is used to set the maximum amount of homeToken that can be accepted using the swapGas() function.
+    /// @param _maxValue The new maximum value.
+    /// @dev The value is stored as a uint256, so it must be passed in as the value multiplied by 10^decimals.
+    /// @dev Setting the max value to 0 will disable use of the swapGas() function.
+    function setMaxValue(uint256 _maxValue) external onlyOwner {
+        maxValue = _maxValue * IERC20Metadata(homeToken).decimals();
     }
 
     /// @notice This function is used to add or remove relayers.
