@@ -30,9 +30,9 @@ contract GasbotV2 {
     IWETH private immutable WETH;
     address private defaultRouter;
     bool private isV3Router; // true if router is Uniswap V3 router, false if Uniswap V2 router
-    address private homeToken;
+    address private homeToken; // token held by this contract to be used as liquidity
     uint24 private defaultPoolFee = 500; // 0.05%
-    uint256 private maxValue;
+    uint256 private maxValue; // max value of homeToken that can be accepted via swapGas()
 
     event GasSwap(
         address indexed sender,
@@ -323,10 +323,16 @@ contract GasbotV2 {
 
     /// @notice This function is used to set the home token for the contract.
     ///         It will likely only be changed as a result of a stablecoin depeg or decline in liquidity.
+    ///         This will also update the maxValue to the new token's decimals.
     /// @param _homeToken The address of the new home token.
     function setHomeToken(address _homeToken) external onlyOwner {
         require(_homeToken != address(0));
+
+        uint256 _prevDecimals = IERC20Metadata(homeToken).decimals();
         homeToken = _homeToken;
+        maxValue =
+            (maxValue * 10 ** IERC20Metadata(_homeToken).decimals()) /
+            (10 ** _prevDecimals);
     }
 
     /// @notice This function is used to set the maximum amount of homeToken that can be accepted using the swapGas() function.
@@ -334,7 +340,7 @@ contract GasbotV2 {
     /// @dev The value is stored as a uint256, so it must be passed in as the value multiplied by 10^decimals.
     /// @dev Setting the max value to 0 will disable use of the swapGas() function.
     function setMaxValue(uint256 _maxValue) external onlyOwner {
-        maxValue = _maxValue * IERC20Metadata(homeToken).decimals();
+        maxValue = _maxValue * 10 ** IERC20Metadata(homeToken).decimals();
     }
 
     /// @notice This function is used to add or remove relayers.
@@ -417,6 +423,16 @@ contract GasbotV2 {
     }
 
     /////// View Functions ///////
+
+    /// @notice This function returns home token address.
+    function getHomeToken() external view returns (address) {
+        return homeToken;
+    }
+
+    /// @notice This function returns the maximum amount of homeToken that can be accepted using the swapGas() function.
+    function getMaxValue() external view returns (uint256) {
+        return maxValue;
+    }
 
     /// @notice This function is used by the Gasbot UI to scan user wallets for native and token balances.
     /// @param _user The address of the user.

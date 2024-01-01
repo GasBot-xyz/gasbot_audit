@@ -615,9 +615,20 @@ contract SetHomeToken is BaseGasbotV2Test {
         gasbot.setHomeToken(address(0));
     }
 
-    function test_successful(address newToken) public {
-        vm.assume(newToken != address(0));
-        gasbot.setHomeToken(newToken);
+    function test_successful() public {
+        uint256 maxValue = gasbot.getMaxValue();
+
+        gasbot.setHomeToken(FRAX);
+        assertEq(gasbot.getHomeToken(), FRAX);
+        assertEq(
+            gasbot.getMaxValue(),
+            (maxValue * 10 ** IERC20(FRAX).decimals()) /
+                10 ** IERC20(USDC).decimals()
+        );
+
+        gasbot.setHomeToken(USDC);
+        assertEq(gasbot.getHomeToken(), USDC);
+        assertEq(gasbot.getMaxValue(), maxValue); // Should be back to original value
     }
 }
 
