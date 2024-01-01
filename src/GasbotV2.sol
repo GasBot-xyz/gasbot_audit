@@ -118,7 +118,8 @@ contract GasbotV2 {
         uint256 _swapAmount,
         address _recipient,
         uint256 _minAmountOut,
-        uint256 outbound_id
+        uint256 outbound_id,
+        uint256 _gasLimit
     ) external onlyRelayer {
         require(!isOutboundIdUsed[outbound_id], "Expired outbound ID");
         isOutboundIdUsed[outbound_id] = true;
@@ -136,7 +137,7 @@ contract GasbotV2 {
             _minAmountOut
         );
         _unwrap();
-        _transferAtLeast(_recipient, _minAmountOut);
+        _transferAtLeast(_recipient, _minAmountOut, _gasLimit);
     }
 
     /// @notice This function pulls in accepted tokens from the user's wallet and transfers out native to the user's wallet.
@@ -155,7 +156,8 @@ contract GasbotV2 {
         bytes calldata _uniV3Path,
         address[] calldata _uniV2Path,
         uint256 _swapAmount,
-        uint256 _minAmountOut
+        uint256 _minAmountOut,
+        uint256 _gasLimit
     ) external onlyRelayer {
         require(_swapAmount < _permitData.amount, "Invalid swap amount");
         _permitAndTransferIn(_token, _permitData);
@@ -168,7 +170,7 @@ contract GasbotV2 {
             _minAmountOut
         );
         _unwrap();
-        _transferAtLeast(_permitData.owner, _minAmountOut);
+        _transferAtLeast(_permitData.owner, _minAmountOut, _gasLimit);
     }
 
     /////// Public Functions ///////
@@ -188,6 +190,11 @@ contract GasbotV2 {
         uint16 _toChainId
     ) external payable {
         require(msg.value > 0, "Invalid amount");
+        require(
+            (_toChainId != block.chainid) && (_toChainId != 0),
+            "Invalid chain ID"
+        );
+
         uint256 initialBalance = IERC20(homeToken).balanceOf(address(this));
         WETH.deposit{value: msg.value}();
 
@@ -280,9 +287,17 @@ contract GasbotV2 {
         WETH.withdraw(wethBalance);
     }
 
-    function _transferAtLeast(address _recipient, uint256 _minAmount) private {
+    function _transferAtLeast(
+        address _recipient,
+        uint256 _minAmount,
+        uint256 _gasLimit
+    ) private {
         require(address(this).balance >= _minAmount, "Native balance too low");
-        payable(_recipient).transfer(address(this).balance);
+        (bool success, ) = payable(_recipient).call{
+            value: address(this).balance,
+            gas: _gasLimit
+        }("");
+        require(success, "Transfer failed");
     }
 
     /////// Admin-Only Functions ///////
@@ -342,11 +357,14 @@ contract GasbotV2 {
         uint256 _value,
         address _recipient
     ) external onlyOwner {
-        (bool success, ) = _target.call{value: _value}(_data);
+        (bool success, ) = payable(_target).call{value: _value}(_data);
         require(success);
 
         if (_recipient != address(0)) {
-            payable(_recipient).transfer(address(this).balance);
+            (success, ) = payable(_recipient).call{
+                value: address(this).balance
+            }("");
+            require(success, "Transfer failed");
         }
     }
 
@@ -360,7 +378,8 @@ contract GasbotV2 {
         address[] calldata _relayers,
         uint256[] calldata _amounts,
         uint256 _swapAmount,
-        uint256 _minAmountOut
+        uint256 _minAmountOut,
+        uint256 _gasLimit
     ) external payable onlyOwner {
         (
             bytes memory uniV3Path,
@@ -380,9 +399,12 @@ contract GasbotV2 {
         for (uint256 i = 0; i < length; ++i) {
             require(isRelayer[_relayers[i]], "Invalid relayer");
             if (i == length - 1) {
-                _transferAtLeast(_relayers[i], _amounts[i]); // Any extra goes to the last relayer
+                _transferAtLeast(_relayers[i], _amounts[i], _gasLimit); // Any extra goes to the last relayer
             } else {
-                payable(_relayers[i]).transfer(_amounts[i]);
+                (bool success, ) = payable(_relayers[i]).call{
+                    value: _amounts[i]
+                }("");
+                require(success, "Transfer failed");
             }
         }
     }
