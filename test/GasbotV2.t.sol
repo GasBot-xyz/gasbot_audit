@@ -137,9 +137,9 @@ contract Constructor is BaseGasbotV2Test {
 }
 
 contract Receive is BaseGasbotV2Test {
-    function test_successful_canReceiveEther() public {
+    function test_revertsIf_receiveEther() public {
         (bool ok, ) = address(gasbot).call{value: 1 ether}("");
-        assertTrue(ok);
+        assertFalse(ok);
     }
 }
 
@@ -167,7 +167,8 @@ contract RelayTokenIn is BaseGasbotV2Test {
             UNI_V3_ROUTER,
             uniV3Path,
             uniV2Path,
-            1_000e18
+            1_000e18,
+            block.timestamp
         );
     }
 
@@ -202,7 +203,8 @@ contract RelayTokenIn is BaseGasbotV2Test {
             UNI_V3_ROUTER,
             uniV3Path,
             uniV2Path,
-            1_000e18
+            1_000e18,
+            block.timestamp
         );
 
         assertEq(IERC20(USDC).balanceOf(address(gasbot)), amount);
@@ -244,7 +246,8 @@ contract RelayTokenIn is BaseGasbotV2Test {
             UNI_V2_ROUTER,
             uniV3Path,
             uniV2Path,
-            minAmountOut
+            minAmountOut,
+            block.timestamp
         );
 
         assertEq(IERC20(AAVE).balanceOf(address(gasbot)), 0);
@@ -285,7 +288,8 @@ contract RelayTokenIn is BaseGasbotV2Test {
             UNI_V3_ROUTER,
             uniV3Path,
             uniV2Path,
-            minAmountOut
+            minAmountOut,
+            block.timestamp
         );
 
         assertEq(IERC20(FRAX).balanceOf(address(gasbot)), 0);
@@ -333,7 +337,8 @@ contract RelayTokenIn is BaseGasbotV2Test {
             UNI_V3_ROUTER,
             new bytes(0),
             new address[](0),
-            minAmountOut
+            minAmountOut,
+            block.timestamp
         );
 
         assertEq(IERC20(USDC).balanceOf(address(gasbot)), amount);
@@ -345,7 +350,14 @@ contract TransferGasOut is BaseGasbotV2Test {
         vm.assume(caller != RELAYER);
         vm.expectRevert("Unauthorized");
         vm.prank(caller);
-        gasbot.transferGasOut(1 ether, RELAYER, 1 ether, 1, DEFAULT_GAS_LIMIT);
+        gasbot.transferGasOut(
+            1 ether,
+            RELAYER,
+            1 ether,
+            1,
+            DEFAULT_GAS_LIMIT,
+            block.timestamp
+        );
     }
 
     function test_revertsIf_expiredOutboundId() public {
@@ -359,7 +371,8 @@ contract TransferGasOut is BaseGasbotV2Test {
             recipient,
             minAmountOut,
             1,
-            DEFAULT_GAS_LIMIT
+            DEFAULT_GAS_LIMIT,
+            block.timestamp
         );
 
         vm.expectRevert("Expired outbound ID");
@@ -369,7 +382,8 @@ contract TransferGasOut is BaseGasbotV2Test {
             recipient,
             minAmountOut,
             1,
-            DEFAULT_GAS_LIMIT
+            DEFAULT_GAS_LIMIT,
+            block.timestamp
         );
     }
 
@@ -379,7 +393,7 @@ contract TransferGasOut is BaseGasbotV2Test {
 
         vm.expectRevert("Transfer failed");
         vm.prank(RELAYER);
-        gasbot.transferGasOut(50e6, WETH, minAmountOut, 1, 50); // Using USDC contract for simple payable contract
+        gasbot.transferGasOut(50e6, WETH, minAmountOut, 1, 50, block.timestamp); // Using USDC contract for simple payable contract
     }
 
     function test_succeedsIf_highGasLimit() public {
@@ -387,7 +401,14 @@ contract TransferGasOut is BaseGasbotV2Test {
         deal(USDC, address(gasbot), 100e6);
 
         vm.prank(RELAYER);
-        gasbot.transferGasOut(50e6, WETH, minAmountOut, 1, 30000); // Using WETH contract for simple payable contract
+        gasbot.transferGasOut(
+            50e6,
+            WETH,
+            minAmountOut,
+            1,
+            30000,
+            block.timestamp
+        ); // Using WETH contract for simple payable contract
     }
 
     function test_revertsIf_notEnoughBalance() public {
@@ -408,7 +429,8 @@ contract TransferGasOut is BaseGasbotV2Test {
             recipient,
             minAmountOut,
             1,
-            DEFAULT_GAS_LIMIT
+            DEFAULT_GAS_LIMIT,
+            block.timestamp
         );
     }
 
@@ -426,7 +448,8 @@ contract TransferGasOut is BaseGasbotV2Test {
             recipient,
             minAmountOut,
             1,
-            DEFAULT_GAS_LIMIT
+            DEFAULT_GAS_LIMIT,
+            block.timestamp
         );
 
         assertEq(IERC20(USDC).balanceOf(address(gasbot)), 50e6);
@@ -462,7 +485,8 @@ contract RelayAndTransfer is BaseGasbotV2Test {
             uniV2Path,
             1_000e18,
             0,
-            DEFAULT_GAS_LIMIT
+            DEFAULT_GAS_LIMIT,
+            block.timestamp
         );
     }
 
@@ -491,7 +515,8 @@ contract RelayAndTransfer is BaseGasbotV2Test {
             uniV2Path,
             2 ether,
             0,
-            DEFAULT_GAS_LIMIT
+            DEFAULT_GAS_LIMIT,
+            block.timestamp
         );
     }
 
@@ -533,7 +558,8 @@ contract RelayAndTransfer is BaseGasbotV2Test {
             uniV2Path,
             amount - 1e6,
             minAmountOut,
-            DEFAULT_GAS_LIMIT
+            DEFAULT_GAS_LIMIT,
+            block.timestamp
         );
 
         assertEq(IERC20(USDC).balanceOf(address(gasbot)), 1e6);
@@ -551,7 +577,7 @@ contract SwapGas is BaseGasbotV2Test {
 
         vm.expectRevert("Invalid amount");
         vm.prank(caller);
-        gasbot.swapGas{value: 0}(minAmountOut, 137);
+        gasbot.swapGas{value: 0}(minAmountOut, 137, block.timestamp);
     }
 
     function test_successful() public {
@@ -565,7 +591,7 @@ contract SwapGas is BaseGasbotV2Test {
         vm.expectEmit(true, true, true, true);
         emit GasSwap(caller, 0.02 ether, 44693653, 1, 137);
         vm.prank(caller);
-        gasbot.swapGas{value: 0.02 ether}(minAmountOut, 137);
+        gasbot.swapGas{value: 0.02 ether}(minAmountOut, 137, block.timestamp);
 
         assertGe(IERC20(USDC).balanceOf(address(gasbot)), minAmountOut);
     }
@@ -579,7 +605,23 @@ contract SwapGas is BaseGasbotV2Test {
 
         vm.expectRevert("Exceeded max value");
         vm.prank(caller);
-        gasbot.swapGas{value: 1 ether}(minAmountOut, 137);
+        gasbot.swapGas{value: 1 ether}(minAmountOut, 137, block.timestamp);
+    }
+
+    function test_revertsIf_lowerThanMaxValue() public {
+        uint256 minAmountOut = 0;
+        address caller = makeAddr("caller");
+        deal(caller, 10 ether);
+
+        assertEq(IERC20(USDC).balanceOf(address(gasbot)), 0);
+
+        vm.expectRevert("Below min value");
+        vm.prank(caller);
+        gasbot.swapGas{value: 0.000000000001 ether}(
+            minAmountOut,
+            137,
+            block.timestamp
+        );
     }
 }
 
@@ -655,7 +697,7 @@ contract SetMaxValue is BaseGasbotV2Test {
 
         vm.expectRevert("Exceeded max value");
         vm.prank(caller);
-        gasbot.swapGas{value: 0.02 ether}(minAmountOut, 137);
+        gasbot.swapGas{value: 0.02 ether}(minAmountOut, 137, block.timestamp);
     }
 }
 
@@ -693,7 +735,8 @@ contract SetRelayer is BaseGasbotV2Test {
             UNI_V3_ROUTER,
             new bytes(0),
             new address[](0),
-            0
+            0,
+            block.timestamp
         );
 
         gasbot.setRelayer(newRelayer, true);
@@ -705,7 +748,8 @@ contract SetRelayer is BaseGasbotV2Test {
             UNI_V3_ROUTER,
             new bytes(0),
             new address[](0),
-            0
+            0,
+            block.timestamp
         );
     }
 
@@ -733,7 +777,8 @@ contract SetRelayer is BaseGasbotV2Test {
             UNI_V3_ROUTER,
             new bytes(0),
             new address[](0),
-            0
+            0,
+            block.timestamp
         );
 
         gasbot.setRelayer(RELAYER, false);
@@ -745,7 +790,8 @@ contract SetRelayer is BaseGasbotV2Test {
             UNI_V3_ROUTER,
             new bytes(0),
             new address[](0),
-            0
+            0,
+            block.timestamp
         );
     }
 }
@@ -846,7 +892,8 @@ contract ReplenishRelayers is BaseGasbotV2Test {
             amounts,
             1 ether,
             1 ether,
-            DEFAULT_GAS_LIMIT
+            DEFAULT_GAS_LIMIT,
+            block.timestamp
         );
     }
 
@@ -871,7 +918,8 @@ contract ReplenishRelayers is BaseGasbotV2Test {
             amounts,
             dealAmount,
             minAmountOut,
-            DEFAULT_GAS_LIMIT
+            DEFAULT_GAS_LIMIT,
+            block.timestamp
         );
     }
 
@@ -895,7 +943,8 @@ contract ReplenishRelayers is BaseGasbotV2Test {
             amounts,
             dealAmount,
             minAmountOut,
-            DEFAULT_GAS_LIMIT
+            DEFAULT_GAS_LIMIT,
+            block.timestamp
         );
 
         assertEq(IERC20(USDC).balanceOf(address(gasbot)), 0);
@@ -928,7 +977,8 @@ contract ReplenishRelayers is BaseGasbotV2Test {
             amounts,
             dealAmount,
             minAmountOut,
-            DEFAULT_GAS_LIMIT
+            DEFAULT_GAS_LIMIT,
+            block.timestamp
         );
 
         assertEq(IERC20(USDC).balanceOf(address(gasbot)), 0);
@@ -945,20 +995,22 @@ contract ReplenishRelayers is BaseGasbotV2Test {
 
 contract Withdraw is BaseGasbotV2Test {
     function test_revertsIf_notOwner(address caller) public {
+        uint256 _balance = IERC20(USDC).balanceOf(address(gasbot));
         vm.assume(caller != address(this));
         vm.expectRevert("Unauthorized");
         vm.prank(caller);
-        gasbot.withdraw(USDC);
+        gasbot.withdraw(USDC, _balance);
     }
 
     function test_successful() public {
         uint256 dealAmount = 100e6;
         deal(USDC, address(gasbot), dealAmount);
+        uint256 _balance = IERC20(USDC).balanceOf(address(gasbot));
 
         assertEq(IERC20(USDC).balanceOf(address(gasbot)), dealAmount);
         assertEq(IERC20(USDC).balanceOf(address(this)), 0);
 
-        gasbot.withdraw(USDC);
+        gasbot.withdraw(USDC, _balance);
 
         assertEq(IERC20(USDC).balanceOf(address(gasbot)), 0);
         assertEq(IERC20(USDC).balanceOf(address(this)), dealAmount);

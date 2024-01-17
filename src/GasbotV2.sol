@@ -33,6 +33,7 @@ contract GasbotV2 {
     address private homeToken; // token held by this contract to be used as liquidity
     uint24 private defaultPoolFee = 500; // 0.05%
     uint256 private maxValue; // max value of homeToken that can be accepted via swapGas()
+    uint256 private minValue; // min value of homeToken that can be accepted via swapGas()
 
     event GasSwap(
         address indexed sender,
@@ -55,6 +56,7 @@ contract GasbotV2 {
         require(_defaultRouter != address(0));
         require(_weth != address(0));
         require(_homeToken != address(0));
+        require(_homeToken != _weth);
 
         owner = _owner;
         isRelayer[_relayer] = true;
@@ -63,6 +65,7 @@ contract GasbotV2 {
         WETH = IWETH(_weth);
         homeToken = _homeToken;
         maxValue = _maxValue * 10 ** IERC20Metadata(_homeToken).decimals();
+        minValue = 2 * 10 ** IERC20Metadata(_homeToken).decimals();
     }
 
     modifier onlyOwner() {
@@ -93,7 +96,8 @@ contract GasbotV2 {
         address _customRouter,
         bytes calldata _uniV3Path,
         address[] calldata _uniV2Path,
-        uint256 _minAmountOut
+        uint256 _minAmountOut,
+        uint256 _deadline
     ) external onlyRelayer {
         _permitAndTransferIn(_token, _permitData);
         if (_token == homeToken) {
@@ -105,7 +109,8 @@ contract GasbotV2 {
             _uniV3Path,
             _uniV2Path,
             _permitData.amount,
-            _minAmountOut
+            _minAmountOut,
+            _deadline
         );
     }
 
@@ -119,7 +124,8 @@ contract GasbotV2 {
         address _recipient,
         uint256 _minAmountOut,
         uint256 outbound_id,
-        uint256 _gasLimit
+        uint256 _gasLimit,
+        uint256 _deadline
     ) external onlyRelayer {
         require(!isOutboundIdUsed[outbound_id], "Expired outbound ID");
         isOutboundIdUsed[outbound_id] = true;
@@ -134,7 +140,8 @@ contract GasbotV2 {
             uniV3Path,
             uniV2Path,
             _swapAmount,
-            _minAmountOut
+            _minAmountOut,
+            _deadline
         );
         _unwrap();
         _transferAtLeast(_recipient, _minAmountOut, _gasLimit);
@@ -157,7 +164,8 @@ contract GasbotV2 {
         address[] calldata _uniV2Path,
         uint256 _swapAmount,
         uint256 _minAmountOut,
-        uint256 _gasLimit
+        uint256 _gasLimit,
+        uint256 _deadline
     ) external onlyRelayer {
         require(_swapAmount < _permitData.amount, "Invalid swap amount");
         _permitAndTransferIn(_token, _permitData);
@@ -167,7 +175,8 @@ contract GasbotV2 {
             _uniV3Path,
             _uniV2Path,
             _swapAmount,
-            _minAmountOut
+            _minAmountOut,
+            _deadline
         );
         _unwrap();
         _transferAtLeast(_permitData.owner, _minAmountOut, _gasLimit);
@@ -187,7 +196,8 @@ contract GasbotV2 {
     /// @param _toChainId The chain ID of the destination chain.
     function swapGas(
         uint256 _minAmountOut,
-        uint16 _toChainId
+        uint16 _toChainId,
+        uint256 _deadline
     ) external payable {
         require(msg.value > 0, "Invalid amount");
         require(
@@ -208,12 +218,14 @@ contract GasbotV2 {
             uniV3Path,
             uniV2Path,
             msg.value,
-            _minAmountOut
+            _minAmountOut,
+            _deadline
         );
         uint256 addedValue = IERC20(homeToken).balanceOf(address(this)) -
             initialBalance;
 
         require(addedValue <= maxValue, "Exceeded max value");
+        require(addedValue >= minValue, "Below min value");
 
         emit GasSwap(
             msg.sender,
@@ -257,15 +269,21 @@ contract GasbotV2 {
         bytes memory _uniV3Path,
         address[] memory _uniV2Path,
         uint256 _amount,
-        uint256 _minAmountOut
+        uint256 _minAmountOut,
+        uint256 _deadline
     ) private {
-        IERC20(_tokenIn).approve(_router, _amount);
+        uint256 allowance = IERC20(_tokenIn).allowance(address(this), _router);
+        if (allowance > 0) {
+            IERC20(_tokenIn).safeDecreaseAllowance(_router, allowance);
+        }
+        IERC20(_tokenIn).safeIncreaseAllowance(_router, _amount);
+
         if (_uniV3Path.length > 0) {
             IUniswapRouterV3(_router).exactInput(
                 IUniswapRouterV3.ExactInputParams({
                     path: _uniV3Path,
                     recipient: address(this),
-                    deadline: block.timestamp,
+                    deadline: _deadline,
                     amountIn: _amount,
                     amountOutMinimum: _minAmountOut
                 })
@@ -276,7 +294,7 @@ contract GasbotV2 {
                 _minAmountOut,
                 _uniV2Path,
                 address(this),
-                block.timestamp
+                _deadline
             );
         }
     }
@@ -327,11 +345,15 @@ contract GasbotV2 {
     /// @param _homeToken The address of the new home token.
     function setHomeToken(address _homeToken) external onlyOwner {
         require(_homeToken != address(0));
+        require(_homeToken != address(WETH));
 
         uint256 _prevDecimals = IERC20Metadata(homeToken).decimals();
         homeToken = _homeToken;
         maxValue =
             (maxValue * 10 ** IERC20Metadata(_homeToken).decimals()) /
+            (10 ** _prevDecimals);
+        minValue =
+            (minValue * 10 ** IERC20Metadata(_homeToken).decimals()) /
             (10 ** _prevDecimals);
     }
 
@@ -341,6 +363,10 @@ contract GasbotV2 {
     /// @dev Setting the max value to 0 will disable use of the swapGas() function.
     function setMaxValue(uint256 _maxValue) external onlyOwner {
         maxValue = _maxValue * 10 ** IERC20Metadata(homeToken).decimals();
+    }
+
+    function setMinValue(uint256 _minValue) external onlyOwner {
+        minValue = _minValue * 10 ** IERC20Metadata(homeToken).decimals();
     }
 
     /// @notice This function is used to add or remove relayers.
@@ -385,7 +411,8 @@ contract GasbotV2 {
         uint256[] calldata _amounts,
         uint256 _swapAmount,
         uint256 _minAmountOut,
-        uint256 _gasLimit
+        uint256 _gasLimit,
+        uint256 _deadline
     ) external payable onlyOwner {
         (
             bytes memory uniV3Path,
@@ -397,7 +424,8 @@ contract GasbotV2 {
             uniV3Path,
             uniV2Path,
             _swapAmount,
-            _minAmountOut
+            _minAmountOut,
+            _deadline
         );
         _unwrap();
 
@@ -417,9 +445,10 @@ contract GasbotV2 {
 
     /// @notice This function will withdraw any ERC20 tokens held by the contract.
     /// @param _token The address of the token to withdraw.
-    function withdraw(address _token) external onlyOwner {
+    function withdraw(address _token, uint256 _amount) external onlyOwner {
         uint256 balance = IERC20(_token).balanceOf(address(this));
-        IERC20(_token).safeTransfer(msg.sender, balance);
+        if (_amount > balance) _amount = balance;
+        IERC20(_token).safeTransfer(msg.sender, _amount);
     }
 
     /////// View Functions ///////
@@ -504,5 +533,7 @@ contract GasbotV2 {
         }
     }
 
-    receive() external payable {}
+    receive() external payable {
+        require(msg.sender == address(WETH), "Invalid sender");
+    }
 }
