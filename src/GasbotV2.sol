@@ -341,7 +341,7 @@ contract GasbotV2 {
 
     /// @notice This function is used to set the home token for the contract.
     ///         It will likely only be changed as a result of a stablecoin depeg or decline in liquidity.
-    ///         This will also update the maxValue to the new token's decimals.
+    ///         This will also update the maxValue and minValue to the new token's decimals.
     /// @param _homeToken The address of the new home token.
     function setHomeToken(address _homeToken) external onlyOwner {
         require(_homeToken != address(0));
@@ -365,6 +365,9 @@ contract GasbotV2 {
         maxValue = _maxValue * 10 ** IERC20Metadata(homeToken).decimals();
     }
 
+    /// @notice This function is used to set the minimum amount of homeToken that can be accepted using the swapGas() function.
+    /// @param _minValue The new minimum value.
+    /// @dev The value is stored as a uint256, so it must be passed in as the value multiplied by 10^decimals.
     function setMinValue(uint256 _minValue) external onlyOwner {
         minValue = _minValue * 10 ** IERC20Metadata(homeToken).decimals();
     }
