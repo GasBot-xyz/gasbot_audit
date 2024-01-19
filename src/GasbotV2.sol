@@ -196,7 +196,7 @@ contract GasbotV2 {
     /// @param _toChainId The chain ID of the destination chain.
     function swapGas(
         uint256 _minAmountOut,
-        uint16 _toChainId,
+        uint256 _toChainId,
         uint256 _deadline
     ) external payable {
         require(msg.value > 0, "Invalid amount");
