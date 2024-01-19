@@ -1,4 +1,3 @@
-
 # GasbotV2 Security Review
 
 A security review of the **[Gasbot](https://www.gasbot.xyz/)** smart contract protocol was done by **[cholakov](https://twitter.com/cholakovv)**.
@@ -11,7 +10,6 @@ Having found numerous security vulnerabilities in various protocols, he does his
 best to contribute to the blockchain ecosystem and its protocols by putting time and
 effort into security research & reviews. Check his previous work [here](https://github.com/cholakovvv/audits) or reach out
 on Twitter [@cholakovv](https://twitter.com/cholakovv).
-
 
 ## Disclaimer
 
@@ -52,51 +50,49 @@ Gasbot is a revolutionary service that simplifies gas acquisition across multipl
 
 ### Overview
 
-|               |                                                                                                                                                   |
-| :------------ | :------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Project Name  | Gasbot                                                                                                                                         |
-| Repository    | [Link](https://github.com/GasBot-xyz/gasbot_audit  )                                                                                          |
+|               |                                                                                                                                                       |
+| :------------ | :---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Project Name  | Gasbot                                                                                                                                                |
+| Repository    | [Link](https://github.com/GasBot-xyz/gasbot_audit)                                                                                                    |
 | Commit hash   | [efb5e1d3735f24c7fadb17d59247a262e2647c7b](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol) |
-| Documentation | [Link](https://docs.gasbot.xyz/overview/introduction)                               |
-| Methods       | Manual review  
-| Date       | January 3rd, 2024
+| Documentation | [Link](https://docs.gasbot.xyz/overview/introduction)                                                                                                 |
+| Methods       | Manual review                                                                                                                                         |
+| Date          | January 3rd, 2024                                                                                                                                     |
 
 ### Scope
 
-| File                                                                                                                                                                         | SLOC |
-| :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---: |
-| _Contracts (1)_                                                                                                                                                              |||
-| [src/GasbotV2.sol](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol)                   |  312 |               
-| _Abstracts (0)_                                                                                                                                                              ||
-| _Interfaces (0)_                                                                                                                                                             ||
-| _Total (1)_                                                                                                                                                                  |  312 |
+| File                                                                                                                          | SLOC |
+| :---------------------------------------------------------------------------------------------------------------------------- | ---: |
+| _Contracts (1)_                                                                                                               |      |
+| [src/GasbotV2.sol](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol) |  312 |
+| _Abstracts (0)_                                                                                                               |      |
+| _Interfaces (0)_                                                                                                              |      |
+| _Total (1)_                                                                                                                   |  312 |
 
 ### Issues found
 
-| Severity      | Count |
-| :------------ | ----: |
-| Critical risk |     0 |
-| High risk     |     0 |
-| Medium risk   |     3 |
-| Low risk      |     7 |
-| **Total**      |     **10** |
-
-
+| Severity      |  Count |
+| :------------ | -----: |
+| Critical risk |      0 |
+| High risk     |      0 |
+| Medium risk   |      3 |
+| Low risk      |      7 |
+| **Total**     | **10** |
 
 ### Summary of Findings
 
-| Severity | ID  |                                                                 Title                                                                 |
-| :------: | :----------------: | :-----------------------------------------------------------------------------------------------------------------------------------: |
-|   Medium   |       [M-01]       |Not calling approve(0) before setting a new approval causes the call to revert when used with Tether (USDT)             |
-|   Medium   |       [M-02]       | Missing transaction expiration check in `_swap()` |
-|   Medium   |       [M-03]       |                                Gas griefing is possible on unsafe external call                                |
-|   Low    |       [L-01]       |                              Consider bounding input array length                               |
-|   Low    |       [L-02]       |                                     Consider implementing two-step procedure for updating protocol addresses                                     |                            |
-|   Low    |       [L-03]       |                           External calls in an un-bounded forloop may result in a DOS                            |
-|   Low    |       [L-04]       |                           Functions calling contracts/addresses with transfer hooks are missing reentrancy guards                           |
-|   Low    |       [L-05]       |                           Loss of precision                            |
-|   Low    |       [L-06]       |                           Unused `receive()` function will lock Ether in contract                            |
-|   Low    |       [L-07]       |                           Return values of approve() not checked                            |
+| Severity |   ID   |                                                    Title                                                    |   Status   |
+| :------: | :----: | :---------------------------------------------------------------------------------------------------------: | :--------: |
+|  Medium  | [M-01] | Not calling approve(0) before setting a new approval causes the call to revert when used with Tether (USDT) | Fixed |
+|  Medium  | [M-02] |                              Missing transaction expiration check in `_swap()`                              | Fixed |
+|  Medium  | [M-03] |                              Gas griefing is possible on unsafe external call                               | Won't fix |
+|   Low    | [L-01] |                                    Consider bounding input array length                                     | Fixed |
+|   Low    | [L-02] |                  Consider implementing two-step procedure for updating protocol addresses                   | Fixed |
+|   Low    | [L-03] |                         External calls in an un-bounded forloop may result in a DOS                         | Fixed |
+|   Low    | [L-04] |           Functions calling contracts/addresses with transfer hooks are missing reentrancy guards           | Fixed |
+|   Low    | [L-05] |                                              Loss of precision                                              | Fixed |
+|   Low    | [L-06] |                           Unused `receive()` function will lock Ether in contract                           | Fixed |
+|   Low    | [L-07] |                                   Return values of approve() not checked                                    | Fixed |
 
 # Detailed findings
 
@@ -105,48 +101,60 @@ Gasbot is a revolutionary service that simplifies gas acquisition across multipl
 ### [M-01] Not calling approve(0) before setting a new approval causes the call to revert when used with Tether (USDT)
 
 #### **Severity**
- Medium risk
+
+Medium risk
 
 #### **Context**
- - [GasbotV2.sol#L254-L282](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L254C4-L282C6)
+
+- [GasbotV2.sol#L254-L282](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L254C4-L282C6)
 
 #### **Description**
- Some tokens (like USDT) do not work when changing the allowance from an existing non-zero allowance value. For example Tether (USDT)'s [approve()](https://etherscan.io/token/0xdac17f958d2ee523a2206206994597c13d831ec7#code#L205) function will revert if the current approval is not zero, to protect against front-running changes of approvals.
+
+Some tokens (like USDT) do not work when changing the allowance from an existing non-zero allowance value. For example Tether (USDT)'s [approve()](https://etherscan.io/token/0xdac17f958d2ee523a2206206994597c13d831ec7#code#L205) function will revert if the current approval is not zero, to protect against front-running changes of approvals.
 
 #### **Recommendation**
- It is recommended to use approve(_router, 0) to set the allowance to zero immediately before each of the existing approve() calls or use OpenZeppelin’s safeApprove/safeIncreaseAllowance.
+
+It is recommended to use approve(\_router, 0) to set the allowance to zero immediately before each of the existing approve() calls or use OpenZeppelin’s safeApprove/safeIncreaseAllowance.
 
 ### [M-02] Missing transaction expiration check in `_swap()`
 
 #### **Severity**
- Medium risk
+
+Medium risk
 
 #### **Context**
- - [GasbotV2.sol#L268](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L268)
+
+- [GasbotV2.sol#L268](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L268)
 
 #### **Description**
- The [_swap()](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L254) function, which is responsible for swapping on Uniswap , sets the deadline argument of the [`exactInput`](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L264) for Uniswap V3 call to [`block.timestamp` ](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L268) – this basically disables the transaction expiration check because the deadline will be set to whatever timestamp the block including the transaction is minted at.
+
+The [\_swap()](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L254) function, which is responsible for swapping on Uniswap , sets the deadline argument of the [`exactInput`](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L264) for Uniswap V3 call to [`block.timestamp` ](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L268) – this basically disables the transaction expiration check because the deadline will be set to whatever timestamp the block including the transaction is minted at.
 
 Transaction expiration check (implemented in Uniswap via the deadline argument) allows users of Uniswap to protect from selling tokens at an outdated price that's lower than the current price.
 
 #### **Recommendation**
- Consider a reasonable value to the deadline argument. For example, [Uniswap sets it to 30 minutes on the Ethereum mainnet and to 5 minutes on L2 networks](https://github.com/Uniswap/interface/blob/main/apps/web/src/constants/misc.ts#L9C1-L10C43).
+
+Consider a reasonable value to the deadline argument. For example, [Uniswap sets it to 30 minutes on the Ethereum mainnet and to 5 minutes on L2 networks](https://github.com/Uniswap/interface/blob/main/apps/web/src/constants/misc.ts#L9C1-L10C43).
 
 ### [M-03] Gas griefing is possible on unsafe external call
 
 #### **Severity**
- Medium risk
+
+Medium risk
 
 #### **Context**
- - [GasbotV2.sol#L290-L301](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L290C5-L301C6)
+
+- [GasbotV2.sol#L290-L301](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L290C5-L301C6)
 
 #### **Description**
- `(bool success, )` used in [_transferAtLeast](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L290C5-L301C6) is actually the same as writing `(bool success, bytes memory data)` which basically means that even though the `data` is omitted it doesn’t mean that the contract does not handle it. Actually, the way it works is the `bytes data` that was returned from the `_recipient` will be copied to memory. Memory allocation becomes very costly if the payload is big, so this means that if a `_recipient` implements a fallback function that returns a huge payload, then the `msg.sender` of the transaction, will have to pay a huge amount of gas for copying this payload to memory.
+
+`(bool success, )` used in [\_transferAtLeast](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L290C5-L301C6) is actually the same as writing `(bool success, bytes memory data)` which basically means that even though the `data` is omitted it doesn’t mean that the contract does not handle it. Actually, the way it works is the `bytes data` that was returned from the `_recipient` will be copied to memory. Memory allocation becomes very costly if the payload is big, so this means that if a `_recipient` implements a fallback function that returns a huge payload, then the `msg.sender` of the transaction, will have to pay a huge amount of gas for copying this payload to memory.
 
 A Malicious actor can launch a gas griefing attack on a relayer. Since griefing attacks have no economic incentive for the attacker and it also requires relayers it should be Medium severity.
 
 #### **Recommendation**
- Use a low-level assembly call since it does not automatically copy return data to memory.
+
+Use a low-level assembly call since it does not automatically copy return data to memory.
 
 ```diff
 - (bool success, ) = payable(_recipient).call{
@@ -166,103 +174,126 @@ A Malicious actor can launch a gas griefing attack on a relayer. Since griefing 
 ### [L-01] Consider bounding input array length
 
 #### **Severity**
- Low risk
+
+Low risk
 
 #### **Context**
- - [GasbotV2.sol#L467-L470](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L467C5-L470C10)
+
+- [GasbotV2.sol#L467-L470](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L467C5-L470C10)
 
 #### **Description**
- The [getRelayerBalances](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L462C4-L472C6) function take in an unbounded array, and make function calls for entries in the array. While the function will revert if the transaction’s gas cost exceed the block gas limit which means that will be impossible to call this function at all. 
+
+The [getRelayerBalances](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L462C4-L472C6) function take in an unbounded array, and make function calls for entries in the array. While the function will revert if the transaction’s gas cost exceed the block gas limit which means that will be impossible to call this function at all.
 
 #### **Recommendation**
- Consider introducing a reasonable upper limit based on block gas limits
 
-
+Consider introducing a reasonable upper limit based on block gas limits
 
 ### [L-02] Consider implementing two-step procedure for updating protocol addresses
 
 #### **Severity**
- Low risk
+
+Low risk
 
 #### **Context**
- - [GasbotV2.sol#L308-L322](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L308C5-L322C6)
+
+- [GasbotV2.sol#L308-L322](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L308C5-L322C6)
 - [GasbotV2.sol#L328-L336](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L328C3-L336C6)
 
 #### **Description**
- A copy-paste error or a typo may end up bricking protocol functionality, or sending tokens to an address with no known private key. 
+
+A copy-paste error or a typo may end up bricking protocol functionality, or sending tokens to an address with no known private key.
 
 #### **Recommendation**
- Consider implementing a two-step procedure for updating protocol addresses, where the recipient is set as pending, and must 'accept' the assignment by making an affirmative call. A straight forward way of doing this would be to have the target contracts implement [EIP-165](https://eips.ethereum.org/EIPS/eip-165), and to have the 'set' functions ensure that the recipient is of the right interface type.
+
+Consider implementing a two-step procedure for updating protocol addresses, where the recipient is set as pending, and must 'accept' the assignment by making an affirmative call. A straight forward way of doing this would be to have the target contracts implement [EIP-165](https://eips.ethereum.org/EIPS/eip-165), and to have the 'set' functions ensure that the recipient is of the right interface type.
 
 ### [L-03] External calls in an un-bounded for loop may result in a DOS
 
 #### **Severity**
- Low risk
+
+Low risk
 
 #### **Context**
- - [GasbotV2.sol#L454-L458](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L454C8-L458C10)
+
+- [GasbotV2.sol#L454-L458](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L454C8-L458C10)
 
 #### **Description**
- External calls in an un-bounded for loop may result in a DOS
+
+External calls in an un-bounded for loop may result in a DOS
 
 #### **Recommendation**
- Consider limiting the number of iterations in `for` loops that make external calls
 
-
+Consider limiting the number of iterations in `for` loops that make external calls
 
 ### [L-04] Functions calling contracts/addresses with transfer hooks are missing reentrancy guards
 
 #### **Severity**
- Low risk
+
+Low risk
 
 #### **Context**
- - [GasbotV2.sol#L420-L423](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L420C5-L423C6)
+
+- [GasbotV2.sol#L420-L423](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L420C5-L423C6)
 
 #### **Description**
- Adherence to the check-effects-interaction pattern is commendable, but without a reentrancy guard in functions, especially with transfer hooks, users are exposed to read-only reentrancy risks. This can lead to malicious actions without altering the contract state. 
+
+Adherence to the check-effects-interaction pattern is commendable, but without a reentrancy guard in functions, especially with transfer hooks, users are exposed to read-only reentrancy risks. This can lead to malicious actions without altering the contract state.
 
 #### **Recommendation**
- Adding a reentrancy guard is vital for security, protecting against both traditional and read-only reentrancy attacks, ensuring a robust and safe protocol.
+
+Adding a reentrancy guard is vital for security, protecting against both traditional and read-only reentrancy attacks, ensuring a robust and safe protocol.
 
 ### [L-05] Loss of precision
 
 #### **Severity**
- Low risk
+
+Low risk
 
 #### **Context**
- - [GasbotV2.sol#L334-L335](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L334C13-L335C35)
+
+- [GasbotV2.sol#L334-L335](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L334C13-L335C35)
 
 #### **Description**
- Division by large numbers may result in the result being zero, due to solidity not supporting fractions. 
+
+Division by large numbers may result in the result being zero, due to solidity not supporting fractions.
 
 #### **Recommendation**
- Consider requiring a minimum amount for the numerator to ensure that it is always larger than the denominator.
+
+Consider requiring a minimum amount for the numerator to ensure that it is always larger than the denominator.
 
 ### [L-06] Unused/empty `receive()` function will lock Ether in contract
 
 #### **Severity**
- Low risk
+
+Low risk
 
 #### **Context**
- - [GasbotV2.sol#L507](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L507)
+
+- [GasbotV2.sol#L507](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L507)
 
 #### **Description**
- Having no access control on the function means that someone may send Ether to the contract, and have no way to get anything back out, which is a loss of funds.
+
+Having no access control on the function means that someone may send Ether to the contract, and have no way to get anything back out, which is a loss of funds.
 
 #### **Recommendation**
- If the intention is for the Ether to be used, the function should call another function, otherwise it should revert (e.g. `require(msg.sender == address(weth))`). 
+
+If the intention is for the Ether to be used, the function should call another function, otherwise it should revert (e.g. `require(msg.sender == address(weth))`).
 
 ### [L-07] Return values of approve() not checked
 
 #### **Severity**
- Low risk
+
+Low risk
 
 #### **Context**
- - [GasbotV2.sol#L262](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L262)
+
+- [GasbotV2.sol#L262](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol#L262)
 
 #### **Description**
- Not all IERC20 implementations `revert()` when there's a failure in `approve()`. The function signature has a boolean return value and they indicate errors that way instead. By not checking the return value, operations that should have marked as failed, may potentially go through without actually approving anything
+
+Not all IERC20 implementations `revert()` when there's a failure in `approve()`. The function signature has a boolean return value and they indicate errors that way instead. By not checking the return value, operations that should have marked as failed, may potentially go through without actually approving anything
 
 #### **Recommendation**
- Use the `safeApprove()` function instead, which reverts the transaction with a proper error message when the return value of `approve` is `false`. A better approach is to use the `safeIncreaseAllowance()` function, which mitigates the multiple withdrawal attack on ERC20 tokens. 
 
+Use the `safeApprove()` function instead, which reverts the transaction with a proper error message when the return value of `approve` is `false`. A better approach is to use the `safeIncreaseAllowance()` function, which mitigates the multiple withdrawal attack on ERC20 tokens.

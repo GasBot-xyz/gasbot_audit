@@ -39,6 +39,8 @@ The V2 iteration adds the functionality of adding gas tokens in addition to stab
 
 **_review commit hash_ - [efb5e1d3735f24c7fadb17d59247a262e2647c7b](https://github.com/GasBot-xyz/gasbot_audit/blob/efb5e1d3735f24c7fadb17d59247a262e2647c7b/src/GasbotV2.sol)**
 
+**_mitigation_review_commit_hash_ - [27dcd1c7e6ec87c837cc7b07e4cd966459f75c7d](https://github.com/GasBot-xyz/gasbot_audit/blob/27dcd1c7e6ec87c837cc7b07e4cd966459f75c7d/src/GasbotV2.sol)**
+
 **No fixes implemented.**
 
 ### Scope
@@ -51,15 +53,15 @@ The following smart contracts were in the scope of the audit:
 
 # Findings Summary
 
-| ID     | Title                                                                                  |   Severity    |  Status  |
-|--------|----------------------------------------------------------------------------------------|:-------------:|:--------:|
-| [M-01] | `approve` always reverts with tokens missing return value, e.g. USDT                   |    Medium     |    -     |
-| [M-02] | `swapGas` doesn't work on chains having chainId bigger than `type(uint16).max`         |    Medium     |    -     |
-| [M-03] | Allow passing deadline check                                                           |    Medium     |    -     |
-| [L-01] | Missing explicit check that `WETH` is not one of the assets in the `GasBotV2` contract |      Low      |    -     |
-| [I-01] | `maxValue` check not enforced in permissioned functions                                | Informational |    -     |
-| [I-02] | Users can be forced to receive gas in case of hanging allowances                       | Informational |    -     |
-| [I-03] | Minimum added value not checked                                                        | Informational |    -     |
+| ID     | Title                                                                                  |   Severity    |    Status     |
+|--------|----------------------------------------------------------------------------------------|:-------------:|:-------------:|
+| [M-01] | `approve` always reverts with tokens missing return value, e.g. USDT                   |    Medium     |   Resolved    |
+| [M-02] | `swapGas` doesn't work on chains having chainId bigger than `type(uint16).max`         |    Medium     |   Resolved    |
+| [M-03] | Allow passing deadline check                                                           |    Medium     |   Resolved    |
+| [L-01] | Missing explicit check that `WETH` is not one of the assets in the `GasBotV2` contract |      Low      |   Resolved    |
+| [I-01] | `maxValue` check not enforced in permissioned functions                                | Informational | Acknowledged  |
+| [I-02] | Users can be forced to receive gas in case of hanging allowances                       | Informational | Acknowledged  |
+| [I-03] | Minimum added value not checked                                                        | Informational |   Resolved    |
 
 # Detailed Findings
 
