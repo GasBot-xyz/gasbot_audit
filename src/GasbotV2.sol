@@ -205,7 +205,8 @@ contract GasbotV2 {
             "Invalid chain ID"
         );
 
-        uint256 initialBalance = IERC20(homeToken).balanceOf(address(this));
+        address homeToken_ = homeToken;
+        uint256 initialBalance = IERC20(homeToken_).balanceOf(address(this));
         WETH.deposit{value: msg.value}();
 
         (
@@ -221,7 +222,7 @@ contract GasbotV2 {
             _minAmountOut,
             _deadline
         );
-        uint256 addedValue = IERC20(homeToken).balanceOf(address(this)) -
+        uint256 addedValue = IERC20(homeToken_).balanceOf(address(this)) -
             initialBalance;
 
         require(addedValue <= maxValue, "Exceeded max value");
@@ -432,10 +433,9 @@ contract GasbotV2 {
         );
         _unwrap();
 
-        uint256 length = _relayers.length;
-        for (uint256 i = 0; i < length; ++i) {
+        for (uint256 i = 0; i < _relayers.length; ) {
             require(isRelayer[_relayers[i]], "Invalid relayer");
-            if (i == length - 1) {
+            if (i == _relayers.length - 1) {
                 _transferAtLeast(_relayers[i], _amounts[i], _gasLimit); // Any extra goes to the last relayer
             } else {
                 (bool success, ) = payable(_relayers[i]).call{
@@ -443,7 +443,49 @@ contract GasbotV2 {
                 }("");
                 require(success, "Transfer failed");
             }
+
+            unchecked {
+                ++i;
+            }
         }
+    }
+
+    /// @notice This function will swap any extra tokens in this contract to home token to be used as liquidity.
+    ///         Non-home tokens can be retained by this contract as a result of relayAndTransfer() when using non-home tokens.
+    /// @param _token The address of the token to swap.
+    /// @param _customRouter The router to use for swapping.
+    /// @param _uniV3Path The Uniswap V3 path to use for swapping.
+    /// @param _uniV2Path The Uniswap V2 path to use for swapping.
+    /// @param _swapAmount The amount of _token to swap.
+    /// @param _minAmountOut The minimum amount of homeToken to receive from the swap.
+    /// @param _deadline The deadline for the swap.
+    function swapTokenToHomeToken(
+        address _token,
+        address _customRouter,
+        bytes calldata _uniV3Path,
+        address[] calldata _uniV2Path,
+        uint256 _swapAmount,
+        uint256 _minAmountOut,
+        uint256 _deadline
+    ) external onlyOwner {
+        address homeToken_ = homeToken;
+        require(_token != homeToken_, "Invalid token");
+        uint256 initialBalance = IERC20(homeToken_).balanceOf(address(this));
+
+        _swap(
+            _customRouter,
+            _token,
+            _uniV3Path,
+            _uniV2Path,
+            _swapAmount,
+            _minAmountOut,
+            _deadline
+        );
+
+        // This check also protects against incorrect uniV3Paths and uniV2Paths
+        uint256 addedValue = IERC20(homeToken_).balanceOf(address(this)) -
+            initialBalance;
+        require(addedValue >= _minAmountOut, "Invalid amount out");
     }
 
     /// @notice This function will withdraw any ERC20 tokens held by the contract.
@@ -478,14 +520,12 @@ contract GasbotV2 {
         uint256[] memory balances_ = new uint256[](length);
 
         // Query user's native balance
-
         tokens_[0] = address(0);
         balances_[0] = _user.balance;
 
         // Query user's token balances
-        for (uint256 i = 1; i < length; i++) {
-            // @audit ++i is a tiny bit cheaper than i++
-            balances_[i] = IERC20(_tokens[i - 1]).balanceOf(_user); // @audit Bug - index-out-of-bounds error
+        for (uint256 i = 1; i < length; ++i) {
+            balances_[i] = IERC20(_tokens[i - 1]).balanceOf(_user);
             tokens_[i] = _tokens[i - 1];
         }
         return (tokens_, balances_);
