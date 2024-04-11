@@ -10,7 +10,7 @@ import "./Interface.sol";
 /// @author 0xDjango
 /// @notice This contract is used to relay gas across chains. The contract holds a single "homeToken" to use as liquidity.
 /// @dev This contract may hold other tokens as a result of calling relayAndTransfer() with a token other than the home token.
-contract GasbotV2 {
+contract Flexy {
     using SafeERC20 for IERC20;
 
     struct PermitParams {
@@ -42,6 +42,8 @@ contract GasbotV2 {
         uint256 indexed fromChainId,
         uint256 indexed toChainId
     );
+
+    event BalanceIncrease(uint256 usdAmount);
 
     constructor(
         address _owner,
@@ -78,6 +80,14 @@ contract GasbotV2 {
         _;
     }
 
+    modifier logIncreasedBalance() {
+        uint256 initialBalance = IERC20(homeToken).balanceOf(address(this));
+        _;
+        uint256 addedValue = IERC20(homeToken).balanceOf(address(this)) -
+            initialBalance;
+        emit BalanceIncrease(addedValue);
+    }
+
     /////// Protected External Functions ///////
 
     /// @notice This function pulls in accepted tokens from the user's wallet.
@@ -98,7 +108,7 @@ contract GasbotV2 {
         address[] calldata _uniV2Path,
         uint256 _minAmountOut,
         uint256 _deadline
-    ) external onlyRelayer {
+    ) external onlyRelayer logIncreasedBalance {
         _permitAndTransferIn(_token, _permitData);
         if (_token == homeToken) {
             return; // no need to swap
@@ -147,8 +157,54 @@ contract GasbotV2 {
         _transferAtLeast(_recipient, _minAmountOut, _gasLimit);
     }
 
+    /// @notice This function transfers out accepted tokens to the user's wallet.
+    /// @param _swapAmount The amount of homeToken to swap.
+    /// @param _recipient The address to transfer the swapped tokens to.
+    /// @param _minAmountOut The minimum amount of wrapped native (eg WETH) to receive from the swap.
+    /// @param outbound_id The ID of the outbound transaction. Must be unique to prevent accidental replay.
+    function transferTokenOut(
+        address _outputToken,
+        uint256 _swapAmount,
+        address _recipient,
+        address _customRouter,
+        bytes calldata _uniV3Path,
+        address[] calldata _uniV2Path,
+        uint256 _minAmountOut,
+        uint256 outbound_id,
+        uint256 _gasLimit,
+        uint256 _deadline
+    ) external payable onlyRelayer {
+        require(!isOutboundIdUsed[outbound_id], "Expired outbound ID");
+        isOutboundIdUsed[outbound_id] = true;
+
+        uint256 initialBalance = IERC20(_outputToken).balanceOf(address(this));
+        _swap(
+            _customRouter,
+            _outputToken,
+            _uniV3Path,
+            _uniV2Path,
+            _swapAmount,
+            _minAmountOut,
+            _deadline
+        );
+
+        IERC20(_outputToken).safeTransfer(
+            _recipient,
+            IERC20(_outputToken).balanceOf(address(this)) - initialBalance
+        );
+
+        if (msg.value > 0) {
+            (bool success, ) = payable(_recipient).call{
+                value: msg.value,
+                gas: _gasLimit
+            }("");
+            require(success, "Transfer failed");
+        }
+    }
+
     /// @notice This function pulls in accepted tokens from the user's wallet and transfers out native to the user's wallet.
-    /// @param _token The token to pull in.
+    /// @param _inputToken The token to pull in.
+    /// @param _outputToken The token to transfer out.
     /// @param _permitData The permit data to use for tokens supporting a permit() function.
     /// @param _customRouter The router to use for swapping.
     /// @param _uniV3Path The Uniswap V3 path to use for swapping.
@@ -157,7 +213,8 @@ contract GasbotV2 {
     /// @param _minAmountOut The minimum amount of wrapped native (eg WETH) to receive from the swap.
     /// @dev This function is used for same-chain swaps.
     function relayAndTransfer(
-        address _token,
+        address _inputToken,
+        address _outputToken,
         PermitParams calldata _permitData,
         address _customRouter,
         bytes calldata _uniV3Path,
@@ -166,20 +223,36 @@ contract GasbotV2 {
         uint256 _minAmountOut,
         uint256 _gasLimit,
         uint256 _deadline
-    ) external onlyRelayer {
+    ) external payable onlyRelayer {
         require(_swapAmount < _permitData.amount, "Invalid swap amount");
-        _permitAndTransferIn(_token, _permitData);
+        _permitAndTransferIn(_inputToken, _permitData);
+
+        uint256 initialBalance = IERC20(_outputToken).balanceOf(address(this));
         _swap(
             _customRouter,
-            _token,
+            _inputToken,
             _uniV3Path,
             _uniV2Path,
             _swapAmount,
             _minAmountOut,
             _deadline
         );
-        _unwrap();
-        _transferAtLeast(_permitData.owner, _minAmountOut, _gasLimit);
+        uint256 addedValue = IERC20(_outputToken).balanceOf(address(this)) -
+            initialBalance;
+
+        if (_outputToken == address(WETH)) {
+            _unwrap();
+            _transferAtLeast(_permitData.owner, _minAmountOut, _gasLimit);
+        } else {
+            IERC20(_outputToken).safeTransfer(_permitData.owner, addedValue);
+            if (msg.value > 0) {
+                (bool success, ) = payable(_permitData.owner).call{
+                    value: msg.value,
+                    gas: _gasLimit
+                }("");
+                require(success, "Transfer failed");
+            }
+        }
     }
 
     /////// Public Functions ///////
