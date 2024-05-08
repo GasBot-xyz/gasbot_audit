@@ -23,24 +23,31 @@ contract Flexy {
         bytes32 s;
     }
 
+    enum RouterType {
+        UniswapV2,
+        UniswapV3,
+        Custom
+    }
+
     address private immutable owner;
     mapping(address => bool) private isRelayer;
     mapping(uint256 => bool) private isOutboundIdUsed;
 
-    IWETH private immutable WETH;
+    IWETH private WETH;
+    RouterType private defaultRouterType; // Router type (Uniswap V2, Uniswap V3, Custom)
     address private defaultRouter;
-    bool private isV3Router; // true if router is Uniswap V3 router, false if Uniswap V2 router
     address private homeToken; // token held by this contract to be used as liquidity
     uint24 private defaultPoolFee = 500; // 0.05%
     uint256 private maxValue; // max value of homeToken that can be accepted via swapGas()
     uint256 private minValue; // min value of homeToken that can be accepted via swapGas()
 
-    event GasSwap(
+    event Bridge(
         address indexed sender,
+        uint256 fromChainId,
+        uint256 indexed toChainId,
+        address indexed toToken,
         uint256 nativeAmount,
-        uint256 usdAmount,
-        uint256 indexed fromChainId,
-        uint256 indexed toChainId
+        uint256 usdAmount
     );
 
     event BalanceIncrease(uint256 usdAmount);
@@ -49,13 +56,14 @@ contract Flexy {
         address _owner,
         address _relayer,
         address _defaultRouter,
-        bool _isV3Router,
+        RouterType _defaultRouterType,
         address _weth,
         address _homeToken,
         uint256 _maxValue
     ) {
         require(_owner != address(0));
         require(_defaultRouter != address(0));
+        require(_defaultRouterType != RouterType.Custom);
         require(_weth != address(0));
         require(_homeToken != address(0));
         require(_homeToken != _weth);
@@ -63,7 +71,7 @@ contract Flexy {
         owner = _owner;
         isRelayer[_relayer] = true;
         defaultRouter = _defaultRouter;
-        isV3Router = _isV3Router;
+        defaultRouterType = _defaultRouterType;
         WETH = IWETH(_weth);
         homeToken = _homeToken;
         maxValue = _maxValue * 10 ** IERC20Metadata(_homeToken).decimals();
@@ -77,6 +85,11 @@ contract Flexy {
 
     modifier onlyRelayer() {
         require(isRelayer[msg.sender], "Unauthorized");
+        _;
+    }
+
+    modifier ensureDeadline(uint256 _deadline) {
+        require(_deadline >= block.timestamp, "Expired deadline");
         _;
     }
 
@@ -94,34 +107,27 @@ contract Flexy {
     /// @param _token The token to pull in.
     /// @param _permitData The permit data to use for tokens supporting a permit() function.
     /// @param _customRouter The router to use for swapping.
-    /// @param _uniV3Path The Uniswap V3 path to use for swapping.
-    /// @param _uniV2Path The Uniswap V2 path to use for swapping.
+    /// @param _swapData The swap data to use for swapping.
     /// @param _minAmountOut The minimum amount of tokens to receive from the swap.
+    /// @param _deadline The deadline for the swap.
     /// @dev If the token does not support permit, the user must approve this contract to spend the token.
     ///      In this case, the passed permit signature will be ignored.
     /// @dev If the token is the home token, no swap will be performed.
+    // @audit Should put home token output check to ensure proper swap path. This function should always increase home token balance.
     function relayTokenIn(
         address _token,
         PermitParams calldata _permitData,
         address _customRouter,
-        bytes calldata _uniV3Path,
-        address[] calldata _uniV2Path,
+        bytes calldata _swapData,
         uint256 _minAmountOut,
         uint256 _deadline
-    ) external onlyRelayer logIncreasedBalance {
+    ) external onlyRelayer ensureDeadline(_deadline) logIncreasedBalance {
         _permitAndTransferIn(_token, _permitData);
-        if (_token == homeToken) {
+        address _homeToken = homeToken;
+        if (_token == _homeToken) {
             return; // no need to swap
         }
-        _swap(
-            _customRouter,
-            _token,
-            _uniV3Path,
-            _uniV2Path,
-            _permitData.amount,
-            _minAmountOut,
-            _deadline
-        );
+        _swap(_customRouter, _homeToken, _swapData, _minAmountOut);
     }
 
     /// @notice This function transfers out accepted tokens to the user's wallet.
@@ -129,6 +135,8 @@ contract Flexy {
     /// @param _recipient The address to transfer the swapped tokens to.
     /// @param _minAmountOut The minimum amount of wrapped native (eg WETH) to receive from the swap.
     /// @param outbound_id The ID of the outbound transaction. Must be unique to prevent accidental replay.
+    /// @param _gasLimit The gas limit for the transfer.
+    /// @param _deadline The deadline for the swap.
     function transferGasOut(
         uint256 _swapAmount,
         address _recipient,
@@ -136,57 +144,47 @@ contract Flexy {
         uint256 outbound_id,
         uint256 _gasLimit,
         uint256 _deadline
-    ) external onlyRelayer {
+    ) external onlyRelayer ensureDeadline(_deadline) {
         require(!isOutboundIdUsed[outbound_id], "Expired outbound ID");
         isOutboundIdUsed[outbound_id] = true;
 
-        (
-            bytes memory uniV3Path,
-            address[] memory uniV2Path
-        ) = getDefaultSwapPaths(true);
-        _swap(
-            defaultRouter,
-            homeToken,
-            uniV3Path,
-            uniV2Path,
+        bytes memory swapData = getDefaultSwapData(
+            true,
             _swapAmount,
             _minAmountOut,
             _deadline
         );
+        _swap(defaultRouter, address(WETH), swapData, _minAmountOut);
         _unwrap();
         _transferAtLeast(_recipient, _minAmountOut, _gasLimit);
     }
 
     /// @notice This function transfers out accepted tokens to the user's wallet.
+    /// @param _outputToken The token to transfer out.
     /// @param _swapAmount The amount of homeToken to swap.
     /// @param _recipient The address to transfer the swapped tokens to.
+    /// @param _customRouter The router to use for swapping.
+    /// @param _swapData The swap data to use for swapping.
     /// @param _minAmountOut The minimum amount of wrapped native (eg WETH) to receive from the swap.
     /// @param outbound_id The ID of the outbound transaction. Must be unique to prevent accidental replay.
+    /// @param _gasLimit The gas limit for the transfer.
+    /// @param _deadline The deadline for the swap.
     function transferTokenOut(
         address _outputToken,
         uint256 _swapAmount,
         address _recipient,
         address _customRouter,
-        bytes calldata _uniV3Path,
-        address[] calldata _uniV2Path,
+        bytes calldata _swapData,
         uint256 _minAmountOut,
         uint256 outbound_id,
         uint256 _gasLimit,
         uint256 _deadline
-    ) external payable onlyRelayer {
+    ) external payable onlyRelayer ensureDeadline(_deadline) {
         require(!isOutboundIdUsed[outbound_id], "Expired outbound ID");
         isOutboundIdUsed[outbound_id] = true;
 
         uint256 initialBalance = IERC20(_outputToken).balanceOf(address(this));
-        _swap(
-            _customRouter,
-            _outputToken,
-            _uniV3Path,
-            _uniV2Path,
-            _swapAmount,
-            _minAmountOut,
-            _deadline
-        );
+        _swap(_customRouter, _outputToken, _swapData, _minAmountOut);
 
         IERC20(_outputToken).safeTransfer(
             _recipient,
@@ -207,36 +205,28 @@ contract Flexy {
     /// @param _outputToken The token to transfer out.
     /// @param _permitData The permit data to use for tokens supporting a permit() function.
     /// @param _customRouter The router to use for swapping.
-    /// @param _uniV3Path The Uniswap V3 path to use for swapping.
-    /// @param _uniV2Path The Uniswap V2 path to use for swapping.
+    /// @param _swapData The swap data to use for swapping.
     /// @param _swapAmount The amount of _token to swap. This will be lower than the permit amount as a result of Gasbot fees and relay txn fees.
     /// @param _minAmountOut The minimum amount of wrapped native (eg WETH) to receive from the swap.
+    /// @param _gasLimit The gas limit for the transfer.
+    /// @param _deadline The deadline for the swap.
     /// @dev This function is used for same-chain swaps.
     function relayAndTransfer(
         address _inputToken,
         address _outputToken,
         PermitParams calldata _permitData,
         address _customRouter,
-        bytes calldata _uniV3Path,
-        address[] calldata _uniV2Path,
+        bytes calldata _swapData,
         uint256 _swapAmount,
         uint256 _minAmountOut,
         uint256 _gasLimit,
         uint256 _deadline
-    ) external payable onlyRelayer {
+    ) external payable onlyRelayer ensureDeadline(_deadline) {
         require(_swapAmount < _permitData.amount, "Invalid swap amount");
         _permitAndTransferIn(_inputToken, _permitData);
 
         uint256 initialBalance = IERC20(_outputToken).balanceOf(address(this));
-        _swap(
-            _customRouter,
-            _inputToken,
-            _uniV3Path,
-            _uniV2Path,
-            _swapAmount,
-            _minAmountOut,
-            _deadline
-        );
+        _swap(_customRouter, _outputToken, _swapData, _minAmountOut);
         uint256 addedValue = IERC20(_outputToken).balanceOf(address(this)) -
             initialBalance;
 
@@ -266,13 +256,15 @@ contract Flexy {
     /// @notice Gasbot transfers native using .transfer(),
     ///         therefore it is crucial that the caller of this function either be an EOA or a contract that will not revert with .tranfer() gas stipend.
     /// @param _minAmountOut The minimum amount of homeToken to receive from the swap.
+    /// @param _toToken The address of the token to receive on the destination chain.
     /// @param _toChainId The chain ID of the destination chain.
     /// @param _deadline The deadline for the swap.
-    function swapGas(
+    function bridgeNative(
         uint256 _toChainId,
+        address _toToken,
         uint256 _minAmountOut,
         uint256 _deadline
-    ) external payable {
+    ) external payable ensureDeadline(_deadline) {
         require(msg.value > 0, "Invalid amount");
         require(
             (_toChainId != block.chainid) && (_toChainId != 0),
@@ -283,31 +275,26 @@ contract Flexy {
         uint256 initialBalance = IERC20(homeToken_).balanceOf(address(this));
         WETH.deposit{value: msg.value}();
 
-        (
-            bytes memory uniV3Path,
-            address[] memory uniV2Path
-        ) = getDefaultSwapPaths(false);
-        _swap(
-            defaultRouter,
-            address(WETH),
-            uniV3Path,
-            uniV2Path,
+        bytes memory swapData = getDefaultSwapData(
+            false,
             msg.value,
             _minAmountOut,
             _deadline
         );
+        _swap(defaultRouter, homeToken_, swapData, _minAmountOut);
         uint256 addedValue = IERC20(homeToken_).balanceOf(address(this)) -
             initialBalance;
 
         require(addedValue <= maxValue, "Exceeded max value");
         require(addedValue >= minValue, "Below min value");
 
-        emit GasSwap(
+        emit Bridge(
             msg.sender,
-            msg.value,
-            addedValue,
             block.chainid,
-            _toChainId
+            _toChainId,
+            _toToken,
+            msg.value,
+            addedValue
         );
     }
 
@@ -338,40 +325,33 @@ contract Flexy {
         );
     }
 
-    function _swap(
-        address _router,
+    function _approve(
         address _tokenIn,
-        bytes memory _uniV3Path,
-        address[] memory _uniV2Path,
-        uint256 _amount,
-        uint256 _minAmountOut,
-        uint256 _deadline
+        address _router,
+        uint256 _swapAmount
     ) private {
         uint256 allowance = IERC20(_tokenIn).allowance(address(this), _router);
-        if (allowance > 0) {
+        if (allowance > 0)
             IERC20(_tokenIn).safeDecreaseAllowance(_router, allowance);
-        }
-        IERC20(_tokenIn).safeIncreaseAllowance(_router, _amount);
+        IERC20(_tokenIn).safeIncreaseAllowance(_router, _swapAmount);
+    }
 
-        if (_uniV3Path.length > 0) {
-            IUniswapRouterV3(_router).exactInput(
-                IUniswapRouterV3.ExactInputParams({
-                    path: _uniV3Path,
-                    recipient: address(this),
-                    deadline: _deadline,
-                    amountIn: _amount,
-                    amountOutMinimum: _minAmountOut
-                })
-            );
-        } else {
-            IUniswapRouterV2(_router).swapExactTokensForTokens(
-                _amount,
+    function _swap(
+        address _router,
+        address _tokenOut,
+        bytes memory _swapData,
+        uint256 _minAmountOut
+    ) private {
+        uint256 initialBalance = IERC20(_tokenOut).balanceOf(address(this));
+
+        (bool success, ) = _router.call(_swapData);
+        require(success, "Swap failed");
+
+        require(
+            IERC20(_tokenOut).balanceOf(address(this)) - initialBalance >=
                 _minAmountOut,
-                _uniV2Path,
-                address(this),
-                _deadline
-            );
-        }
+            "Invalid amount out"
+        );
     }
 
     function _unwrap() private {
@@ -397,14 +377,14 @@ contract Flexy {
 
     /// @notice This function is used to set the default router used for swapping in the swapGas() and transferGasOut() functions.
     /// @param _defaultRouter The address of the default router.
-    /// @param _isV3Router True if the router is a Uniswap V3 router, false if it is a Uniswap V2 router.
+    /// @param _defaultRouterType The type of the default router.
     function setDefaultRouter(
         address _defaultRouter,
-        bool _isV3Router
+        RouterType _defaultRouterType
     ) external onlyOwner {
         require(_defaultRouter != address(0));
         defaultRouter = _defaultRouter;
-        isV3Router = _isV3Router;
+        defaultRouterType = _defaultRouterType;
     }
 
     /// @notice This function is used to set the default pool fee used for swapping in the swapGas() and transferGasOut() functions.
@@ -430,6 +410,14 @@ contract Flexy {
         minValue =
             (minValue * 10 ** IERC20Metadata(_homeToken).decimals()) /
             (10 ** _prevDecimals);
+    }
+
+    /// @notice This function is used to set the WETH contract address.
+    /// @param _weth The address of the WETH contract.
+    function setWETH(address _weth) external onlyOwner {
+        require(_weth != address(0));
+        require(_weth != homeToken);
+        WETH = IWETH(_weth);
     }
 
     /// @notice This function is used to set the maximum amount of homeToken that can be accepted using the swapGas() function.
@@ -492,19 +480,13 @@ contract Flexy {
         uint256 _gasLimit,
         uint256 _deadline
     ) external payable onlyOwner {
-        (
-            bytes memory uniV3Path,
-            address[] memory uniV2Path
-        ) = getDefaultSwapPaths(true);
-        _swap(
-            defaultRouter,
-            homeToken,
-            uniV3Path,
-            uniV2Path,
+        bytes memory swapData = getDefaultSwapData(
+            true,
             _swapAmount,
             _minAmountOut,
             _deadline
         );
+        _swap(defaultRouter, address(WETH), swapData, _minAmountOut);
         _unwrap();
 
         for (uint256 i = 0; i < _relayers.length; ) {
@@ -528,38 +510,20 @@ contract Flexy {
     ///         Non-home tokens can be retained by this contract as a result of relayAndTransfer() when using non-home tokens.
     /// @param _token The address of the token to swap.
     /// @param _customRouter The router to use for swapping.
-    /// @param _uniV3Path The Uniswap V3 path to use for swapping.
-    /// @param _uniV2Path The Uniswap V2 path to use for swapping.
-    /// @param _swapAmount The amount of _token to swap.
+    /// @param _swapData The swap data to use for swapping.
     /// @param _minAmountOut The minimum amount of homeToken to receive from the swap.
     /// @param _deadline The deadline for the swap.
     function swapTokenToHomeToken(
         address _token,
         address _customRouter,
-        bytes calldata _uniV3Path,
-        address[] calldata _uniV2Path,
-        uint256 _swapAmount,
+        bytes calldata _swapData,
         uint256 _minAmountOut,
         uint256 _deadline
-    ) external onlyOwner {
+    ) external onlyOwner logIncreasedBalance {
         address homeToken_ = homeToken;
         require(_token != homeToken_, "Invalid token");
-        uint256 initialBalance = IERC20(homeToken_).balanceOf(address(this));
 
-        _swap(
-            _customRouter,
-            _token,
-            _uniV3Path,
-            _uniV2Path,
-            _swapAmount,
-            _minAmountOut,
-            _deadline
-        );
-
-        // This check also protects against incorrect uniV3Paths and uniV2Paths
-        uint256 addedValue = IERC20(homeToken_).balanceOf(address(this)) -
-            initialBalance;
-        require(addedValue >= _minAmountOut, "Invalid amount out");
+        _swap(_customRouter, homeToken, _swapData, _minAmountOut);
     }
 
     /// @notice This function will withdraw any ERC20 tokens held by the contract.
@@ -617,15 +581,17 @@ contract Flexy {
         return balances_;
     }
 
-    function getDefaultSwapPaths(
-        bool _toWeth
-    )
-        private
-        view
-        returns (bytes memory uniV3Path, address[] memory uniV2Path)
-    {
-        if (isV3Router) {
+    // @audit change visibility to private after audit
+    function getDefaultSwapData(
+        bool _toWeth,
+        uint256 _swapAmount,
+        uint256 _minAmountOut,
+        uint256 deadline
+    ) public view returns (bytes memory swapData) {
+        if (defaultRouterType == RouterType.UniswapV3) {
+            bytes memory uniV3Path;
             if (_toWeth) {
+                //@audit see if uniV3path is needed or if can directly add tokenIn, tokenOut, and fee to swapData
                 uniV3Path = abi.encodePacked(
                     homeToken,
                     defaultPoolFee,
@@ -638,8 +604,19 @@ contract Flexy {
                     homeToken
                 );
             }
-        } else {
-            uniV2Path = new address[](2);
+
+            swapData = abi.encodeWithSelector(
+                IUniswapRouterV3.exactInput.selector,
+                IUniswapRouterV3.ExactInputParams({
+                    path: uniV3Path,
+                    recipient: address(this),
+                    deadline: deadline,
+                    amountIn: _swapAmount,
+                    amountOutMinimum: _minAmountOut
+                })
+            );
+        } else if (defaultRouterType == RouterType.UniswapV2) {
+            address[] memory uniV2Path = new address[](2);
             if (_toWeth) {
                 uniV2Path[0] = homeToken;
                 uniV2Path[1] = address(WETH);
@@ -647,6 +624,17 @@ contract Flexy {
                 uniV2Path[0] = address(WETH);
                 uniV2Path[1] = homeToken;
             }
+
+            swapData = abi.encodeWithSelector(
+                IUniswapRouterV2.swapExactTokensForTokens.selector,
+                _swapAmount,
+                _minAmountOut,
+                uniV2Path,
+                address(this),
+                deadline
+            );
+        } else {
+            revert("Invalid default router type");
         }
     }
 
