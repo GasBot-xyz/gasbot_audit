@@ -93,14 +93,6 @@ contract Flexy {
         _;
     }
 
-    modifier logIncreasedBalance() {
-        uint256 initialBalance = IERC20(homeToken).balanceOf(address(this));
-        _;
-        uint256 addedValue = IERC20(homeToken).balanceOf(address(this)) -
-            initialBalance;
-        emit BalanceIncrease(addedValue);
-    }
-
     /////// Protected External Functions ///////
 
     /// @notice This function pulls in accepted tokens from the user's wallet.
@@ -121,7 +113,7 @@ contract Flexy {
         bytes calldata _swapData,
         uint256 _minAmountOut,
         uint256 _deadline
-    ) external onlyRelayer ensureDeadline(_deadline) logIncreasedBalance {
+    ) external onlyRelayer ensureDeadline(_deadline) {
         _permitAndTransferIn(_token, _permitData);
         address _homeToken = homeToken;
         if (_token == _homeToken) return; // no need to swap
@@ -153,19 +145,21 @@ contract Flexy {
         require(!isOutboundIdUsed[outbound_id], "Expired outbound ID");
         isOutboundIdUsed[outbound_id] = true;
 
-        uint256 initialBalance = IERC20(_outputToken).balanceOf(address(this));
         _approve(homeToken, _customRouter, _swapAmount);
-        _swap(_customRouter, _outputToken, _swapData, _minAmountOut);
-        uint256 addedValue = IERC20(_outputToken).balanceOf(address(this)) -
-            initialBalance;
+        uint256 amountOut = _swap(
+            _customRouter,
+            _outputToken,
+            _swapData,
+            _minAmountOut
+        );
 
         if (_outputToken == address(0)) {
             require(msg.value == 0); // Receipient is receiving native, we should not be sending extra native here
             _unwrap();
-            _transferAtLeast(_recipient, _minAmountOut, _gasLimit);
+            _transferAtLeast(_recipient, amountOut, _gasLimit);
             return;
         } else {
-            IERC20(_outputToken).safeTransfer(_recipient, addedValue);
+            IERC20(_outputToken).safeTransfer(_recipient, amountOut);
             _transferMsgValue(_recipient, _gasLimit);
         }
     }
@@ -195,19 +189,21 @@ contract Flexy {
         require(_swapAmount < _permitData.amount, "Invalid swap amount");
         _permitAndTransferIn(_inputToken, _permitData);
 
-        uint256 initialBalance = IERC20(_outputToken).balanceOf(address(this));
         _approve(_inputToken, _customRouter, _swapAmount);
-        _swap(_customRouter, _outputToken, _swapData, _minAmountOut);
-        uint256 addedValue = IERC20(_outputToken).balanceOf(address(this)) -
-            initialBalance;
+        uint256 amountOut = _swap(
+            _customRouter,
+            _outputToken,
+            _swapData,
+            _minAmountOut
+        );
 
         if (_outputToken == address(0)) {
             require(msg.value == 0); // Receipient is receiving native, we should not be sending extra native here
             _unwrap();
-            _transferAtLeast(_permitData.owner, _minAmountOut, _gasLimit);
+            _transferAtLeast(_permitData.owner, amountOut, _gasLimit);
             return;
         } else {
-            IERC20(_outputToken).safeTransfer(_permitData.owner, addedValue);
+            IERC20(_outputToken).safeTransfer(_permitData.owner, amountOut);
             _transferMsgValue(_permitData.owner, _gasLimit);
         }
     }
@@ -239,7 +235,6 @@ contract Flexy {
         );
 
         address homeToken_ = homeToken;
-        uint256 initialBalance = IERC20(homeToken_).balanceOf(address(this));
         WETH.deposit{value: msg.value}();
 
         bytes memory swapData = getDefaultSwapData(
@@ -249,12 +244,15 @@ contract Flexy {
             _deadline
         );
         _approve(address(WETH), defaultRouter, msg.value);
-        _swap(defaultRouter, homeToken_, swapData, _minAmountOut);
-        uint256 addedValue = IERC20(homeToken_).balanceOf(address(this)) -
-            initialBalance;
+        uint256 amountOut = _swap(
+            defaultRouter,
+            homeToken_,
+            swapData,
+            _minAmountOut
+        );
 
-        require(addedValue <= maxValue, "Exceeded max value");
-        require(addedValue >= minValue, "Below min value");
+        require(amountOut <= maxValue, "Exceeded max value");
+        require(amountOut >= minValue, "Below min value");
 
         emit Bridge(
             msg.sender,
@@ -262,7 +260,7 @@ contract Flexy {
             _toChainId,
             _toToken,
             msg.value,
-            addedValue
+            amountOut
         );
     }
 
@@ -309,17 +307,15 @@ contract Flexy {
         address _tokenOut,
         bytes memory _swapData,
         uint256 _minAmountOut
-    ) private {
+    ) private returns (uint256 amountOut) {
         uint256 initialBalance = IERC20(_tokenOut).balanceOf(address(this));
 
         (bool success, ) = _router.call(_swapData);
         require(success, "Swap failed");
 
-        require(
-            IERC20(_tokenOut).balanceOf(address(this)) - initialBalance >=
-                _minAmountOut,
-            "Invalid amount out"
-        );
+        amountOut = IERC20(_tokenOut).balanceOf(address(this)) - initialBalance;
+        require(amountOut >= _minAmountOut, "Invalid amount out");
+        return amountOut;
     }
 
     function _unwrap() private {
@@ -497,7 +493,7 @@ contract Flexy {
         bytes calldata _swapData,
         uint256 _minAmountOut,
         uint256 _deadline
-    ) external onlyOwner logIncreasedBalance {
+    ) external onlyOwner ensureDeadline(_deadline) {
         address homeToken_ = homeToken;
         require(_token != homeToken_, "Invalid token");
 
