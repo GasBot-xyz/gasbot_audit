@@ -6,9 +6,9 @@ import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./Interface.sol";
 
-/// @title GasbotV2
+/// @title Flexy
 /// @author 0xDjango
-/// @notice This contract is used to relay gas across chains. The contract holds a single "homeToken" to use as liquidity.
+/// @notice This contract is used to relay tokens across chains. The contract holds a single "homeToken" to use as liquidity.
 /// @dev This contract may hold other tokens as a result of calling relayAndTransfer() with a token other than the home token.
 contract Flexy {
     using SafeERC20 for IERC20;
@@ -34,12 +34,12 @@ contract Flexy {
     mapping(uint256 => bool) private isOutboundIdUsed;
 
     IWETH private WETH;
-    RouterType private defaultRouterType; // Router type (Uniswap V2, Uniswap V3, Custom)
     address private defaultRouter;
+    RouterType private defaultRouterType; // Router type (Uniswap V2, Uniswap V3, Custom)
     address private homeToken; // token held by this contract to be used as liquidity
     uint24 private defaultPoolFee = 500; // 0.05%
-    uint256 private maxValue; // max value of homeToken that can be accepted via swapGas()
-    uint256 private minValue; // min value of homeToken that can be accepted via swapGas()
+    uint256 private maxValue; // max value of homeToken that can be accepted via bridge()
+    uint256 private minValue; // min value of homeToken that can be accepted via bridge()
 
     event Bridge(
         address indexed sender,
@@ -114,7 +114,7 @@ contract Flexy {
     ///      In this case, the passed permit signature will be ignored.
     /// @dev If the token is the home token, no swap will be performed.
     // @audit Should put home token output check to ensure proper swap path. This function should always increase home token balance.
-    function relayTokenIn(
+    function relayIn(
         address _token,
         PermitParams calldata _permitData,
         address _customRouter,
@@ -124,39 +124,9 @@ contract Flexy {
     ) external onlyRelayer ensureDeadline(_deadline) logIncreasedBalance {
         _permitAndTransferIn(_token, _permitData);
         address _homeToken = homeToken;
-        if (_token == _homeToken) {
-            return; // no need to swap
-        }
+        if (_token == _homeToken) return; // no need to swap
+        _approve(_token, _customRouter, _permitData.amount);
         _swap(_customRouter, _homeToken, _swapData, _minAmountOut);
-    }
-
-    /// @notice This function transfers out accepted tokens to the user's wallet.
-    /// @param _swapAmount The amount of homeToken to swap.
-    /// @param _recipient The address to transfer the swapped tokens to.
-    /// @param _minAmountOut The minimum amount of wrapped native (eg WETH) to receive from the swap.
-    /// @param outbound_id The ID of the outbound transaction. Must be unique to prevent accidental replay.
-    /// @param _gasLimit The gas limit for the transfer.
-    /// @param _deadline The deadline for the swap.
-    function transferGasOut(
-        uint256 _swapAmount,
-        address _recipient,
-        uint256 _minAmountOut,
-        uint256 outbound_id,
-        uint256 _gasLimit,
-        uint256 _deadline
-    ) external onlyRelayer ensureDeadline(_deadline) {
-        require(!isOutboundIdUsed[outbound_id], "Expired outbound ID");
-        isOutboundIdUsed[outbound_id] = true;
-
-        bytes memory swapData = getDefaultSwapData(
-            true,
-            _swapAmount,
-            _minAmountOut,
-            _deadline
-        );
-        _swap(defaultRouter, address(WETH), swapData, _minAmountOut);
-        _unwrap();
-        _transferAtLeast(_recipient, _minAmountOut, _gasLimit);
     }
 
     /// @notice This function transfers out accepted tokens to the user's wallet.
@@ -169,12 +139,12 @@ contract Flexy {
     /// @param outbound_id The ID of the outbound transaction. Must be unique to prevent accidental replay.
     /// @param _gasLimit The gas limit for the transfer.
     /// @param _deadline The deadline for the swap.
-    function transferTokenOut(
+    function transferOut(
         address _outputToken,
-        uint256 _swapAmount,
         address _recipient,
         address _customRouter,
         bytes calldata _swapData,
+        uint256 _swapAmount,
         uint256 _minAmountOut,
         uint256 outbound_id,
         uint256 _gasLimit,
@@ -184,19 +154,19 @@ contract Flexy {
         isOutboundIdUsed[outbound_id] = true;
 
         uint256 initialBalance = IERC20(_outputToken).balanceOf(address(this));
+        _approve(homeToken, _customRouter, _swapAmount);
         _swap(_customRouter, _outputToken, _swapData, _minAmountOut);
+        uint256 addedValue = IERC20(_outputToken).balanceOf(address(this)) -
+            initialBalance;
 
-        IERC20(_outputToken).safeTransfer(
-            _recipient,
-            IERC20(_outputToken).balanceOf(address(this)) - initialBalance
-        );
-
-        if (msg.value > 0) {
-            (bool success, ) = payable(_recipient).call{
-                value: msg.value,
-                gas: _gasLimit
-            }("");
-            require(success, "Transfer failed");
+        if (_outputToken == address(0)) {
+            require(msg.value == 0); // Receipient is receiving native, we should not be sending extra native here
+            _unwrap();
+            _transferAtLeast(_recipient, _minAmountOut, _gasLimit);
+            return;
+        } else {
+            IERC20(_outputToken).safeTransfer(_recipient, addedValue);
+            _transferMsgValue(_recipient, _gasLimit);
         }
     }
 
@@ -226,22 +196,19 @@ contract Flexy {
         _permitAndTransferIn(_inputToken, _permitData);
 
         uint256 initialBalance = IERC20(_outputToken).balanceOf(address(this));
+        _approve(_inputToken, _customRouter, _swapAmount);
         _swap(_customRouter, _outputToken, _swapData, _minAmountOut);
         uint256 addedValue = IERC20(_outputToken).balanceOf(address(this)) -
             initialBalance;
 
-        if (_outputToken == address(WETH)) {
+        if (_outputToken == address(0)) {
+            require(msg.value == 0); // Receipient is receiving native, we should not be sending extra native here
             _unwrap();
             _transferAtLeast(_permitData.owner, _minAmountOut, _gasLimit);
+            return;
         } else {
             IERC20(_outputToken).safeTransfer(_permitData.owner, addedValue);
-            if (msg.value > 0) {
-                (bool success, ) = payable(_permitData.owner).call{
-                    value: msg.value,
-                    gas: _gasLimit
-                }("");
-                require(success, "Transfer failed");
-            }
+            _transferMsgValue(_permitData.owner, _gasLimit);
         }
     }
 
@@ -281,6 +248,7 @@ contract Flexy {
             _minAmountOut,
             _deadline
         );
+        _approve(address(WETH), defaultRouter, msg.value);
         _swap(defaultRouter, homeToken_, swapData, _minAmountOut);
         uint256 addedValue = IERC20(homeToken_).balanceOf(address(this)) -
             initialBalance;
@@ -371,6 +339,16 @@ contract Flexy {
             gas: _gasLimit
         }("");
         require(success, "Transfer failed");
+    }
+
+    function _transferMsgValue(address _recipient, uint256 _gasLimit) private {
+        if (msg.value > 0) {
+            (bool success, ) = payable(_recipient).call{
+                value: msg.value,
+                gas: _gasLimit
+            }("");
+            require(success, "Transfer failed");
+        }
     }
 
     /////// Admin-Only Functions ///////
