@@ -23,6 +23,11 @@ contract Flexy {
         bytes32 s;
     }
 
+    struct Permit2Params {
+        ISignatureTransfer.PermitTransferFrom permit;
+        bytes signature;
+    }
+
     enum RouterType {
         UniswapV2,
         UniswapV3,
@@ -34,6 +39,7 @@ contract Flexy {
     mapping(uint256 => bool) private isOutboundIdUsed;
 
     IWETH private WETH;
+    IPermit2 private permit2;
     address private defaultRouter;
     RouterType private defaultRouterType; // Router type (Uniswap V2, Uniswap V3, Custom)
     address private homeToken; // token held by this contract to be used as liquidity
@@ -50,8 +56,6 @@ contract Flexy {
         uint256 usdAmount
     );
 
-    event BalanceIncrease(uint256 usdAmount);
-
     constructor(
         address _owner,
         address _relayer,
@@ -59,6 +63,7 @@ contract Flexy {
         RouterType _defaultRouterType,
         address _weth,
         address _homeToken,
+        address _permit2,
         uint256 _maxValue
     ) {
         require(_owner != address(0));
@@ -67,6 +72,7 @@ contract Flexy {
         require(_weth != address(0));
         require(_homeToken != address(0));
         require(_homeToken != _weth);
+        require(_permit2 != address(0));
 
         owner = _owner;
         isRelayer[_relayer] = true;
@@ -74,6 +80,7 @@ contract Flexy {
         defaultRouterType = _defaultRouterType;
         WETH = IWETH(_weth);
         homeToken = _homeToken;
+        permit2 = IPermit2(_permit2);
         maxValue = _maxValue * 10 ** IERC20Metadata(_homeToken).decimals();
         minValue = 2 * 10 ** IERC20Metadata(_homeToken).decimals();
     }
@@ -109,12 +116,18 @@ contract Flexy {
     function relayIn(
         address _token,
         PermitParams calldata _permitData,
+        Permit2Params calldata _permit2Data,
         address _customRouter,
         bytes calldata _swapData,
         uint256 _minAmountOut,
         uint256 _deadline
     ) external onlyRelayer ensureDeadline(_deadline) {
-        _permitAndTransferIn(_token, _permitData);
+        _permitAndTransferIn(
+            _token,
+            _permitData.owner,
+            _permitData,
+            _permit2Data
+        );
         address _homeToken = homeToken;
         if (_token == _homeToken) return; // no need to swap
         _approve(_token, _customRouter, _permitData.amount);
@@ -179,6 +192,7 @@ contract Flexy {
         address _inputToken,
         address _outputToken,
         PermitParams calldata _permitData,
+        Permit2Params calldata _permit2Data,
         address _customRouter,
         bytes calldata _swapData,
         uint256 _swapAmount,
@@ -187,7 +201,12 @@ contract Flexy {
         uint256 _deadline
     ) external payable onlyRelayer ensureDeadline(_deadline) {
         require(_swapAmount < _permitData.amount, "Invalid swap amount");
-        _permitAndTransferIn(_inputToken, _permitData);
+        _permitAndTransferIn(
+            _inputToken,
+            _permitData.owner,
+            _permitData,
+            _permit2Data
+        );
 
         _approve(_inputToken, _customRouter, _swapAmount);
         uint256 amountOut = _swap(
@@ -268,27 +287,42 @@ contract Flexy {
 
     function _permitAndTransferIn(
         address _token,
-        PermitParams calldata _permitData
+        address _owner,
+        PermitParams calldata _permitData,
+        Permit2Params calldata _permit2Data
     ) private {
         if (
-            IERC20(_token).allowance(_permitData.owner, address(this)) <
-            _permitData.amount
+            IERC20(_token).allowance(_owner, address(this)) < _permitData.amount
         ) {
-            IERC20Permit(_token).permit(
-                _permitData.owner,
-                _permitData.spender,
-                _permitData.amount,
-                _permitData.deadline,
-                _permitData.v,
-                _permitData.r,
-                _permitData.s
-            );
+            if (_permitData.v != 0) {
+                IERC20Permit(_token).permit(
+                    _owner,
+                    _permitData.spender,
+                    _permitData.amount,
+                    _permitData.deadline,
+                    _permitData.v,
+                    _permitData.r,
+                    _permitData.s
+                );
+                IERC20(_token).safeTransferFrom(
+                    _owner,
+                    address(this),
+                    _permitData.amount
+                );
+            } else {
+                ISignatureTransfer.SignatureTransferDetails
+                    memory transferDetails = _generateTransferDetails(
+                        address(this),
+                        _permit2Data.permit.permitted.amount
+                    );
+                permit2.permitTransferFrom(
+                    _permit2Data.permit,
+                    transferDetails,
+                    _owner,
+                    _permit2Data.signature
+                );
+            }
         }
-        IERC20(_token).safeTransferFrom(
-            _permitData.owner,
-            address(this),
-            _permitData.amount
-        );
     }
 
     function _approve(
@@ -347,6 +381,21 @@ contract Flexy {
         }
     }
 
+    function _generateTransferDetails(
+        address _to,
+        uint256 _amount
+    )
+        private
+        pure
+        returns (ISignatureTransfer.SignatureTransferDetails memory)
+    {
+        ISignatureTransfer.SignatureTransferDetails
+            memory transferDetails = ISignatureTransfer
+                .SignatureTransferDetails({to: _to, requestedAmount: _amount});
+
+        return transferDetails;
+    }
+
     /////// Admin-Only Functions ///////
 
     /// @notice This function is used to set the default router used for swapping in the swapGas() and transferGasOut() functions.
@@ -392,6 +441,13 @@ contract Flexy {
         require(_weth != address(0));
         require(_weth != homeToken);
         WETH = IWETH(_weth);
+    }
+
+    /// @notice This function is used to set the permit2 contract address.
+    /// @param _permit2 The address of the permit2 contract.
+    function setPermit2(address _permit2) external onlyOwner {
+        require(_permit2 != address(0));
+        permit2 = IPermit2(_permit2);
     }
 
     /// @notice This function is used to set the maximum amount of homeToken that can be accepted using the swapGas() function.
@@ -523,24 +579,34 @@ contract Flexy {
     /// @notice This function is used by the Gasbot UI to scan user wallets for native and token balances.
     /// @param _user The address of the user.
     /// @param _tokens The addresses of the tokens to query.
-    function getTokenBalances(
+    function getTokenBalancesAndPermit2Allowances(
         address _user,
         address[] calldata _tokens
-    ) public view returns (address[] memory, uint256[] memory) {
+    )
+        public
+        view
+        returns (address[] memory, uint256[] memory, uint256[] memory)
+    {
         uint256 length = _tokens.length + 1;
         address[] memory tokens_ = new address[](length);
         uint256[] memory balances_ = new uint256[](length);
+        uint256[] memory allowances_ = new uint256[](length);
 
         // Query user's native balance
         tokens_[0] = address(0);
         balances_[0] = _user.balance;
+        allowances_[0] = 0;
 
-        // Query user's token balances
+        // Query user's token balances and permit2 allowances
         for (uint256 i = 1; i < length; ++i) {
             balances_[i] = IERC20(_tokens[i - 1]).balanceOf(_user);
+            allowances_[i] = IERC20(_tokens[i - 1]).allowance(
+                address(permit2),
+                _user
+            );
             tokens_[i] = _tokens[i - 1];
         }
-        return (tokens_, balances_);
+        return (tokens_, balances_, allowances_);
     }
 
     function getRelayerBalances(
