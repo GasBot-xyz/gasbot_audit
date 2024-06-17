@@ -13,8 +13,7 @@ contract FlexyQuick is DSTest, Script {
     address relayer = 0x757EEB3E60d0D3f9a8a34A8540AB6c88eB058e49;
 
     function setUp() external {
-        string
-            memory rpc = "https://rpc.ankr.com/scroll/eb48a33ddd90d1a05df0c6599854b3fa3ad93ca7daa46622a4291faacf73a904";
+        string memory rpc = "https://rpc.ankr.com/scroll/";
         uint256 forkId = vm.createFork(rpc);
         vm.selectFork(forkId);
 
