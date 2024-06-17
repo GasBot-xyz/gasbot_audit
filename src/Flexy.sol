@@ -329,8 +329,15 @@ contract Flexy {
         Permit2Params calldata _permit2Data
     ) private {
         if (
-            IERC20(_token).allowance(_owner, address(this)) < _permitData.amount
+            IERC20(_token).allowance(_owner, address(this)) >=
+            _permitData.amount
         ) {
+            IERC20(_token).safeTransferFrom(
+                _owner,
+                address(this),
+                _permitData.amount
+            );
+        } else {
             if (_permitData.v != 0) {
                 IERC20Permit(_token).permit(
                     _owner,
