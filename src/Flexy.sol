@@ -34,7 +34,8 @@ contract Flexy {
         Custom
     }
 
-    address private immutable owner;
+    address private owner;
+    address public pendingOwner;
     mapping(address => bool) private isRelayer;
     mapping(uint256 => bool) private isOutboundIdUsed;
 
@@ -50,10 +51,11 @@ contract Flexy {
     event Bridge(
         address indexed sender,
         uint256 fromChainId,
+        address fromToken,
         uint256 indexed toChainId,
         address indexed toToken,
         uint256 nativeAmount,
-        uint256 usdAmount
+        uint256 homeTokenAmount
     );
 
     constructor(
@@ -128,10 +130,39 @@ contract Flexy {
             _permitData,
             _permit2Data
         );
+
         address _homeToken = homeToken;
-        if (_token == _homeToken) return; // no need to swap
+        if (_token == _homeToken) {
+            emit Bridge(
+                _permitData.owner,
+                block.chainid,
+                _homeToken,
+                0,
+                _homeToken,
+                _permitData.amount,
+                _permitData.amount
+            );
+            return;
+        } // no need to swap
+
         _approve(_token, _customRouter, _permitData.amount);
-        _swap(_customRouter, _homeToken, _swapData, _minAmountOut);
+        uint256 amountOut = _swap(
+            _customRouter,
+            _homeToken,
+            _swapData,
+            _minAmountOut
+        );
+        require(amountOut <= maxValue, "Exceeded max value");
+
+        emit Bridge(
+            _permitData.owner,
+            block.chainid,
+            _token,
+            0,
+            _homeToken,
+            _permitData.amount,
+            amountOut
+        );
     }
 
     /// @notice This function transfers out accepted tokens to the user's wallet.
@@ -158,13 +189,18 @@ contract Flexy {
         require(!isOutboundIdUsed[outbound_id], "Expired outbound ID");
         isOutboundIdUsed[outbound_id] = true;
 
-        _approve(homeToken, _customRouter, _swapAmount);
-        uint256 amountOut = _swap(
-            _customRouter,
-            _outputToken,
-            _swapData,
-            _minAmountOut
-        );
+        uint256 amountOut;
+        if (_outputToken != homeToken) {
+            _approve(homeToken, _customRouter, _swapAmount);
+            amountOut = _swap(
+                _customRouter,
+                _outputToken,
+                _swapData,
+                _minAmountOut
+            );
+        } else {
+            amountOut = _swapAmount;
+        }
 
         if (_outputToken == address(0)) {
             require(msg.value == 0); // Receipient is receiving native, we should not be sending extra native here
@@ -276,6 +312,7 @@ contract Flexy {
         emit Bridge(
             msg.sender,
             block.chainid,
+            address(0),
             _toChainId,
             _toToken,
             msg.value,
@@ -342,18 +379,18 @@ contract Flexy {
         bytes memory _swapData,
         uint256 _minAmountOut
     ) private returns (uint256 amountOut) {
-        uint256 initialBalance = IERC20(_tokenOut).balanceOf(address(this));
+        uint256 initialBalance = _getContractBalance(_tokenOut);
 
         (bool success, ) = _router.call(_swapData);
         require(success, "Swap failed");
 
-        amountOut = IERC20(_tokenOut).balanceOf(address(this)) - initialBalance;
+        amountOut = _getContractBalance(_tokenOut) - initialBalance;
         require(amountOut >= _minAmountOut, "Invalid amount out");
         return amountOut;
     }
 
     function _unwrap() private {
-        uint256 wethBalance = WETH.balanceOf(address(this));
+        uint256 wethBalance = _getContractBalance(address(WETH));
         if (wethBalance == 0) return;
         WETH.withdraw(wethBalance);
     }
@@ -394,6 +431,13 @@ contract Flexy {
                 .SignatureTransferDetails({to: _to, requestedAmount: _amount});
 
         return transferDetails;
+    }
+
+    function _getContractBalance(
+        address _token
+    ) private view returns (uint256) {
+        if (_token == address(0)) _token = address(WETH);
+        return IERC20(_token).balanceOf(address(this));
     }
 
     /////// Admin-Only Functions ///////
@@ -469,6 +513,20 @@ contract Flexy {
     /// @param _relayer The address of the relayer.
     function setRelayer(address _relayer, bool _status) external onlyOwner {
         isRelayer[_relayer] = _status;
+    }
+
+    /// @notice This function is used to transfer ownership of the contract.
+    /// @param _newOwner The address of the new owner.
+    function setPendingOwner(address _newOwner) external onlyOwner {
+        require(_newOwner != address(0));
+        pendingOwner = _newOwner;
+    }
+
+    /// @notice This function is used to accept ownership of the contract.
+    function acceptOwnership() external {
+        require(msg.sender == pendingOwner);
+        pendingOwner = address(0);
+        owner = msg.sender;
     }
 
     /**
@@ -559,7 +617,7 @@ contract Flexy {
     /// @notice This function will withdraw any ERC20 tokens held by the contract.
     /// @param _token The address of the token to withdraw.
     function withdraw(address _token, uint256 _amount) external onlyOwner {
-        uint256 balance = IERC20(_token).balanceOf(address(this));
+        uint256 balance = _getContractBalance(_token);
         if (_amount > balance) _amount = balance;
         IERC20(_token).safeTransfer(msg.sender, _amount);
     }
