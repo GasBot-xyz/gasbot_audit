@@ -4,35 +4,14 @@ pragma solidity =0.8.19;
 
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "./Interface.sol";
+import "./FlexyInterface.sol";
 
 /// @title Flexy
 /// @author 0xDjango
 /// @notice This contract is used to relay tokens across chains. The contract holds a single "homeToken" to use as liquidity.
 /// @dev This contract may hold other tokens as a result of calling relayAndTransfer() with a token other than the home token.
-contract Flexy {
+contract Flexy is IFlexy {
     using SafeERC20 for IERC20;
-
-    struct PermitParams {
-        address owner;
-        address spender;
-        uint256 amount;
-        uint256 deadline;
-        uint8 v;
-        bytes32 r;
-        bytes32 s;
-    }
-
-    struct Permit2Params {
-        ISignatureTransfer.PermitTransferFrom permit;
-        bytes signature;
-    }
-
-    enum RouterType {
-        UniswapV2,
-        UniswapV3,
-        Custom
-    }
 
     address private owner;
     address public pendingOwner;
@@ -236,7 +215,7 @@ contract Flexy {
         uint256 _gasLimit,
         uint256 _deadline
     ) external payable onlyRelayer ensureDeadline(_deadline) {
-        require(_swapAmount < _permitData.amount, "Invalid swap amount");
+        require(_swapAmount <= _permitData.amount, "Invalid swap amount");
         _permitAndTransferIn(
             _inputToken,
             _permitData.owner,
@@ -357,7 +336,7 @@ contract Flexy {
                 ISignatureTransfer.SignatureTransferDetails
                     memory transferDetails = _generateTransferDetails(
                         address(this),
-                        _permit2Data.permit.permitted.amount
+                        _permitData.amount
                     );
                 permit2.permitTransferFrom(
                     _permit2Data.permit,
@@ -374,10 +353,7 @@ contract Flexy {
         address _router,
         uint256 _swapAmount
     ) private {
-        uint256 allowance = IERC20(_tokenIn).allowance(address(this), _router);
-        if (allowance > 0)
-            IERC20(_tokenIn).safeDecreaseAllowance(_router, allowance);
-        IERC20(_tokenIn).safeIncreaseAllowance(_router, _swapAmount);
+        IERC20(_tokenIn).forceApprove(_router, _swapAmount);
     }
 
     function _swap(
@@ -692,7 +668,7 @@ contract Flexy {
         uint256 _swapAmount,
         uint256 _minAmountOut,
         uint256 deadline
-    ) public view returns (bytes memory swapData) {
+    ) private view returns (bytes memory swapData) {
         if (defaultRouterType == RouterType.UniswapV3) {
             bytes memory uniV3Path;
             if (_toWeth) {
